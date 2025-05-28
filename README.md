@@ -13,7 +13,7 @@
   Upon execution, the script presents an interactive menu, allowing users to select specific modules for data collection (Who doesn't love a nice menu!)
 
 - **Comprehensive Data Collection**  
-  When all modules are executed, the script gathers extensive information, exporting each dataset into their very own personalized CSV files for easy analysis!
+  When all modules are executed, the script gathers extensive information, exporting each dataset into CSV files for easy analysis!
 
 ---
 
