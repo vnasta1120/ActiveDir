@@ -1,5 +1,5 @@
-# Active Directory Discovery Assessment PowerShell Scripts - Ultimate Edition
-# The Most Comprehensive AD Assessment Tool Available
+# Active Directory Discovery Assessment - Ultimate Edition!!
+# The Most Comprehensive AD Assessment Tool Available!
 # Optimized for large environments (50,000+ objects) with progress tracking
 # Run with appropriate domain admin privileges
 
