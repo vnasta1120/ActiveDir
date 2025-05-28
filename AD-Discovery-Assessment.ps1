@@ -1,7 +1,6 @@
 # Active Directory Discovery Assessment PowerShell Scripts - Ultimate Edition
 # The Most Comprehensive AD Assessment Tool Available
 # Optimized for large environments (50,000+ objects) with progress tracking
-# Version 4.0 - Complete Enterprise Assessment Suite
 # Run with appropriate domain admin privileges
 
 <#
@@ -9,7 +8,7 @@
     The Ultimate Active Directory Discovery and Assessment Tool for migration planning
 
 .DESCRIPTION
-    This comprehensive assessment tool provides complete visibility into your AD environment:
+    This comprehensive assessment tool provides complete visibility into the AD environment:
     
     CORE ASSESSMENTS:
     - User Analysis: Standard, Admin, Service, MSAs, gMSAs with usage mapping
@@ -50,10 +49,6 @@
     .\AD-Discovery-Assessment.ps1
     Runs the interactive menu to select specific assessments
 
-.NOTES
-    Author: Enterprise Migration Specialist
-    Version: 4.0
-    Last Updated: 2024
 #>
 
 #Requires -Version 5.1
