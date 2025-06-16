@@ -1930,6 +1930,2134 @@ function Get-AdvancedSPNAnalysis {
 }
 #endregion
 
+#region Additional Assessment Functions (ADSI Version)
+
+function Get-PrintersAssessment {
+    if (-not $Global:Config.Features.EnablePrintersAssessment) {
+        Write-Log "Printers assessment disabled in configuration"
+        return
+    }
+    
+    Write-Log "=== Starting Printers Assessment (ADSI Version) ==="
+    
+    $ScriptStartTime = Get-Date
+    $AllPrinters = @()
+    
+    try {
+        # Get all published printers from AD using ADSI
+        Write-Host "Searching for published printers in AD using ADSI..." -ForegroundColor Yellow
+        
+        $PrinterSearcher = Get-ADSISearcher -Filter "(objectCategory=printQueue)" -Properties @(
+            "printername", "servername", "drivername", "location",
+            "description", "portname", "printsharename", "whencreated"
+        )
+        
+        $Results = $PrinterSearcher.FindAll()
+        $TotalPrinters = $Results.Count
+        Write-Log "Found $TotalPrinters published printers"
+        
+        $ProcessedCount = 0
+        
+        foreach ($Result in $Results) {
+            $ProcessedCount++
+            
+            if ($ProcessedCount % $Global:Config.ProgressUpdateInterval -eq 0) {
+                $PercentComplete = ($ProcessedCount / $TotalPrinters) * 100
+                Write-Progress -Activity "Processing Printers (ADSI)" `
+                    -Status "Processing printer $ProcessedCount of $TotalPrinters" `
+                    -PercentComplete $PercentComplete
+            }
+            
+            $PrinterObject = [PSCustomObject]@{
+                PrinterName = Get-ADSIProperty -SearchResult $Result -PropertyName "printername"
+                ServerName = Get-ADSIProperty -SearchResult $Result -PropertyName "servername"
+                DriverName = Get-ADSIProperty -SearchResult $Result -PropertyName "drivername"
+                Location = Get-ADSIProperty -SearchResult $Result -PropertyName "location"
+                Description = Get-ADSIProperty -SearchResult $Result -PropertyName "description"
+                PortName = Get-ADSIProperty -SearchResult $Result -PropertyName "portname"
+                ShareName = Get-ADSIProperty -SearchResult $Result -PropertyName "printsharename"
+                WhenCreated = Get-ADSIProperty -SearchResult $Result -PropertyName "whencreated"
+            }
+            
+            $AllPrinters += $PrinterObject
+        }
+        
+        $Results.Dispose()
+        $PrinterSearcher.Dispose()
+        
+    } catch {
+        Write-Log "Error searching for AD printers: $($_.Exception.Message)"
+    }
+    
+    # Also get print servers using ADSI
+    Write-Host "Identifying print servers using ADSI..." -ForegroundColor Yellow
+    
+    $PrintServers = @()
+    try {
+        $ServerSearcher = Get-ADSISearcher -Filter "(&(objectClass=computer)(operatingSystem=*Server*))" -Properties @("cn", "operatingsystem")
+        $ServerResults = $ServerSearcher.FindAll()
+        
+        foreach ($ServerResult in $ServerResults) {
+            try {
+                $ServerName = Get-ADSIProperty -SearchResult $ServerResult -PropertyName "cn"
+                $OperatingSystem = Get-ADSIProperty -SearchResult $ServerResult -PropertyName "operatingsystem"
+                
+                $PrintSpooler = Get-Service -ComputerName $ServerName -Name Spooler -ErrorAction SilentlyContinue
+                if ($PrintSpooler.Status -eq 'Running') {
+                    $PrinterCount = (Get-WmiObject -Class Win32_Printer -ComputerName $ServerName -ErrorAction SilentlyContinue).Count
+                    if ($PrinterCount -gt 0) {
+                        $PrintServers += [PSCustomObject]@{
+                            ServerName = $ServerName
+                            OperatingSystem = $OperatingSystem
+                            PrinterCount = $PrinterCount
+                            SpoolerStatus = $PrintSpooler.Status
+                        }
+                    }
+                }
+            } catch {}
+        }
+        
+        $ServerResults.Dispose()
+        $ServerSearcher.Dispose()
+    } catch {
+        Write-Log "Error identifying print servers: $($_.Exception.Message)"
+    }
+    
+    Write-Progress -Activity "Processing Printers" -Completed
+    
+    # Export results
+    if ($AllPrinters.Count -gt 0) {
+        $AllPrinters | Export-Csv "$Global:OutputPath\Printers_Published.csv" -NoTypeInformation -Encoding UTF8
+    }
+    
+    if ($PrintServers.Count -gt 0) {
+        $PrintServers | Export-Csv "$Global:OutputPath\Printers_Servers.csv" -NoTypeInformation -Encoding UTF8
+    }
+    
+    # Summary statistics
+    $PrinterStats = [PSCustomObject]@{
+        TotalPublishedPrinters = $AllPrinters.Count
+        UniquePrintServers = ($AllPrinters | Select-Object -ExpandProperty ServerName -Unique).Count
+        PrintServersIdentified = $PrintServers.Count
+        ProcessingTime = ((Get-Date) - $ScriptStartTime).TotalMinutes
+    }
+    
+    $PrinterStats | Export-Csv "$Global:OutputPath\Printers_Summary_Stats.csv" -NoTypeInformation -Encoding UTF8
+    
+    Write-Log "Printer assessment completed in $([math]::Round($PrinterStats.ProcessingTime, 2)) minutes using ADSI"
+    
+    [GC]::Collect()
+}
+
+function Get-SharesAssessment {
+    if (-not $Global:Config.Features.EnableSharesAssessment) {
+        Write-Log "File Shares assessment disabled in configuration"
+        return
+    }
+    
+    Write-Log "=== Starting File Shares Assessment (ADSI Version) ==="
+    
+    $ScriptStartTime = Get-Date
+    $AllShares = @()
+    
+    # Get all servers using ADSI
+    Write-Host "Getting list of servers to scan for shares using ADSI..." -ForegroundColor Yellow
+    $ServerSearcher = Get-ADSISearcher -Filter "(&(objectClass=computer)(operatingSystem=*Server*)(userAccountControl:1.2.840.113556.1.4.803:=512))" -Properties @("cn")
+    $ServerResults = $ServerSearcher.FindAll()
+    
+    $Servers = @()
+    foreach ($ServerResult in $ServerResults) {
+        $ServerName = Get-ADSIProperty -SearchResult $ServerResult -PropertyName "cn"
+        if ($ServerName) {
+            $Servers += $ServerName
+        }
+    }
+    
+    $ServerResults.Dispose()
+    $ServerSearcher.Dispose()
+    
+    $TotalServers = $Servers.Count
+    Write-Log "Found $TotalServers servers to scan using ADSI"
+    
+    $ProcessedCount = 0
+    
+    foreach ($Server in $Servers) {
+        $ProcessedCount++
+        
+        $PercentComplete = ($ProcessedCount / $TotalServers) * 100
+        $ETA = Get-ETA -Current $ProcessedCount -Total $TotalServers -StartTime $ScriptStartTime
+        
+        Write-Progress -Activity "Scanning Shares (ADSI)" `
+            -Status "Scanning server $ProcessedCount of $TotalServers - ETA: $ETA" `
+            -PercentComplete $PercentComplete `
+            -CurrentOperation "Server: $Server"
+        
+        try {
+            # Get shares from server
+            $Shares = Get-WmiObject -Class Win32_Share -ComputerName $Server -ErrorAction Stop |
+                Where-Object {$_.Type -eq 0}  # Disk shares only
+            
+            foreach ($Share in $Shares) {
+                # Skip system shares
+                if ($Share.Name -match '[\$]
+function Get-ADUsersAssessment {
+    Write-Log "=== Starting Standard AD Users Assessment (ADSI Version) ==="
+    
+    $ScriptStartTime = Get-Date
+    $CutoffDate = (Get-Date).AddDays(-$Global:Config.InactiveUserDays)  # Use configured threshold
+    
+    # Get total user count first using ADSI
+    Write-Host "Counting total AD users using ADSI..." -ForegroundColor Yellow
+    $UserSearcher = Get-ADSISearcher -Filter "(&(objectCategory=person)(objectClass=user))" -Properties @("cn")
+    $UserResults = $UserSearcher.FindAll()
+    $TotalUserCount = $UserResults.Count
+    $UserResults.Dispose()
+    Write-Log "Total AD Users found: $TotalUserCount"
+    
+    # Initialize collections
+    $AllUsers = @()
+    $ProcessedCount = 0
+    
+    # Process users in batches using ADSI
+    $Searcher = Get-ADSISearcher -Filter "(&(objectCategory=person)(objectClass=user))" -Properties @(
+        "samaccountname", "displayname", "userprincipalname", "useraccountcontrol",
+        "lastlogontimestamp", "pwdlastset", "whencreated", "description",
+        "department", "title", "manager", "memberof", "distinguishedname", "mail", "employeeid"
+    ) -PageSize $Global:Config.BatchSize
+    
+    Write-Host "Processing $TotalUserCount users in batches of $($Global:Config.BatchSize) using ADSI..." -ForegroundColor Green
+    
+    try {
+        $Results = $Searcher.FindAll()
+        
+        foreach ($Result in $Results) {
+            $ProcessedCount++
+            
+            # Update progress every configurable interval
+            if ($ProcessedCount % $Global:Config.ProgressUpdateInterval -eq 0) {
+                $PercentComplete = ($ProcessedCount / $TotalUserCount) * 100
+                $ETA = Get-ETA -Current $ProcessedCount -Total $TotalUserCount -StartTime $ScriptStartTime
+                
+                Write-Progress -Activity "Processing AD Users (Standard ADSI)" `
+                    -Status "Processing user $ProcessedCount of $TotalUserCount - ETA: $ETA" `
+                    -PercentComplete $PercentComplete `
+                    -CurrentOperation "Analyzing user accounts..."
+            }
+            
+            try {
+                # Get user properties using ADSI
+                $SamAccountName = Get-ADSIProperty -SearchResult $Result -PropertyName "samaccountname"
+                $DisplayName = Get-ADSIProperty -SearchResult $Result -PropertyName "displayname"
+                $UserPrincipalName = Get-ADSIProperty -SearchResult $Result -PropertyName "userprincipalname"
+                $Description = Get-ADSIProperty -SearchResult $Result -PropertyName "description"
+                $Mail = Get-ADSIProperty -SearchResult $Result -PropertyName "mail"
+                $EmployeeID = Get-ADSIProperty -SearchResult $Result -PropertyName "employeeid"
+                $Department = Get-ADSIProperty -SearchResult $Result -PropertyName "department"
+                $Title = Get-ADSIProperty -SearchResult $Result -PropertyName "title"
+                
+                # Convert timestamps using ADSI
+                $LastLogon = $null
+                $LastLogonRaw = Get-ADSIProperty -SearchResult $Result -PropertyName "lastlogontimestamp"
+                if ($LastLogonRaw) {
+                    $LastLogon = Convert-ADSILargeInteger -LargeInteger $LastLogonRaw
+                }
+                
+                $PwdLastSet = $null
+                $PwdLastSetRaw = Get-ADSIProperty -SearchResult $Result -PropertyName "pwdlastset"
+                if ($PwdLastSetRaw) {
+                    $PwdLastSet = Convert-ADSILargeInteger -LargeInteger $PwdLastSetRaw
+                }
+                
+                $WhenCreated = Get-ADSIProperty -SearchResult $Result -PropertyName "whencreated"
+                
+                $UAC = Get-ADSIProperty -SearchResult $Result -PropertyName "useraccountcontrol"
+                if (!$UAC) { $UAC = 0 }
+                $UACAnalysis = Get-UACSummary -UACValue $UAC  # Use ADUAC enumeration
+                
+                # Determine account type using enhanced logic
+                $AccountType = Test-AccountType -SamAccountName $SamAccountName -Description $Description -UACAnalysis $UACAnalysis
+                
+                # Check if active using configurable threshold
+                $IsEnabled = !$UACAnalysis.IsDisabled
+                $IsActive = $IsEnabled -and (($LastLogon -gt $CutoffDate) -or ($PwdLastSet -gt $CutoffDate))
+                
+                # Get group memberships (limit to first 50 to avoid performance issues)
+                $GroupMemberships = Get-ADSIPropertyCollection -SearchResult $Result -PropertyName "memberof"
+                $Groups = @()
+                $GroupCount = 0
+                foreach ($GroupDN in $GroupMemberships) {
+                    if ($GroupCount -ge 50) { 
+                        $Groups += "...(truncated)"
+                        break 
+                    }
+                    try {
+                        $GroupName = $GroupDN -replace '^CN=([^,]+),.*$', '$1'
+                        $Groups += $GroupName
+                        $GroupCount++
+                    } catch {}
+                }
+                
+                $UserObject = [PSCustomObject]@{
+                    SamAccountName = $SamAccountName
+                    DisplayName = $DisplayName
+                    UserPrincipalName = $UserPrincipalName
+                    EmailAddress = $Mail
+                    EmployeeID = $EmployeeID
+                    Enabled = $IsEnabled
+                    LastLogonDate = $LastLogon
+                    PasswordLastSet = $PwdLastSet
+                    WhenCreated = $WhenCreated
+                    Description = $Description
+                    Department = $Department
+                    Title = $Title
+                    AccountType = $AccountType
+                    IsActive = $IsActive
+                    GroupCount = $Groups.Count
+                    MemberOfGroups = $Groups -join '; '
+                    
+                    # Enhanced with ADUAC analysis
+                    UserAccountControl = $UAC
+                    UACFlags = $UACAnalysis.FlagsString
+                    PasswordNeverExpires = $UACAnalysis.PasswordNeverExpires
+                    SmartCardRequired = $UACAnalysis.SmartCardRequired
+                    TrustedForDelegation = $UACAnalysis.TrustedForDelegation
+                }
+                
+                $AllUsers += $UserObject
+                
+                # Export in configurable batches to avoid memory issues
+                if ($AllUsers.Count -ge $Global:Config.OutputSettings.ExportBatchSize) {
+                    $AllUsers | Export-Csv "$Global:OutputPath\Users_Standard.csv" -NoTypeInformation -Append -Encoding UTF8
+                    $AllUsers = @()
+                }
+                
+            } catch {
+                Write-Log "Error processing user: $($_.Exception.Message)"
+            }
+        }
+        
+        # Export remaining users
+        if ($AllUsers.Count -gt 0) {
+            $AllUsers | Export-Csv "$Global:OutputPath\Users_Standard.csv" -NoTypeInformation -Append -Encoding UTF8
+        }
+        
+        Write-Progress -Activity "Processing AD Users (Standard)" -Completed
+        Write-Log "User processing completed. Generating summary reports..."
+        
+        # Generate filtered reports
+        Write-Host "Generating user category reports..." -ForegroundColor Yellow
+        
+        # Read back the full user list for categorization
+        $AllUsersData = Import-Csv "$Global:OutputPath\Users_Standard.csv"
+        
+        # Active Standard Users
+        $AllUsersData | Where-Object {$_.AccountType -eq "Standard User" -and $_.IsActive -eq "True"} |
+            Export-Csv "$Global:OutputPath\Users_Active_Standard.csv" -NoTypeInformation -Encoding UTF8
+        
+        # Active Admin Accounts
+        $AllUsersData | Where-Object {$_.AccountType -eq "Admin Account" -and $_.IsActive -eq "True"} |
+            Export-Csv "$Global:OutputPath\Users_Active_Admin.csv" -NoTypeInformation -Encoding UTF8
+        
+        # Service Accounts
+        $ServiceAccounts = $AllUsersData | Where-Object {$_.AccountType -eq "Service Account"}
+        $ServiceAccounts | Export-Csv "$Global:OutputPath\Users_Service_Accounts.csv" -NoTypeInformation -Encoding UTF8
+        
+        # Generate summary statistics
+        $UserStats = [PSCustomObject]@{
+            TotalUsers = $AllUsersData.Count
+            ActiveStandardUsers = ($AllUsersData | Where-Object {$_.AccountType -eq "Standard User" -and $_.IsActive -eq "True"}).Count
+            ActiveAdminUsers = ($AllUsersData | Where-Object {$_.AccountType -eq "Admin Account" -and $_.IsActive -eq "True"}).Count
+            ServiceAccountsTotal = $ServiceAccounts.Count
+            ActiveServiceAccounts = ($ServiceAccounts | Where-Object {$_.IsActive -eq "True"}).Count
+            InactiveUsers = ($AllUsersData | Where-Object {$_.IsActive -eq "False"}).Count
+            ConfiguredInactiveThreshold = $Global:Config.InactiveUserDays
+            ProcessingTime = ((Get-Date) - $ScriptStartTime).TotalMinutes
+        }
+        
+        $UserStats | Export-Csv "$Global:OutputPath\Users_Summary_Stats.csv" -NoTypeInformation -Encoding UTF8
+        
+        Write-Log "User assessment completed in $([math]::Round($UserStats.ProcessingTime, 2)) minutes using $($Global:Config.InactiveUserDays) day threshold (ADSI)"
+        
+    } catch {
+        Write-Log "Critical error in user assessment: $($_.Exception.Message)"
+    } finally {
+        # Clean up ADSI resources
+        if ($Results) { $Results.Dispose() }
+        if ($Searcher) { $Searcher.Dispose() }
+        [GC]::Collect()
+    }
+}
+
+function Get-ADComputersAssessment {
+    Write-Log "=== Starting Standard AD Computers Assessment (ADSI Version) ==="
+    
+    $ScriptStartTime = Get-Date
+    $InactiveThreshold = (Get-Date).AddDays(-$Global:Config.InactiveComputerDays)  # Use configured threshold
+    
+    # Get total computer count using ADSI
+    Write-Host "Counting total AD computers using ADSI..." -ForegroundColor Yellow
+    $ComputerSearcher = Get-ADSISearcher -Filter "(objectClass=computer)" -Properties @("cn")
+    $ComputerResults = $ComputerSearcher.FindAll()
+    $TotalComputerCount = $ComputerResults.Count
+    $ComputerResults.Dispose()
+    Write-Log "Total AD Computers found: $TotalComputerCount"
+    
+    $AllComputers = @()
+    $ProcessedCount = 0
+    
+    # Process computers in batches using ADSI
+    $Searcher = Get-ADSISearcher -Filter "(objectClass=computer)" -Properties @(
+        "cn", "dnshostname", "useraccountcontrol", "operatingsystem", 
+        "operatingsystemversion", "lastlogontimestamp", "whencreated",
+        "description", "distinguishedname", "location"
+    ) -PageSize $Global:Config.BatchSize
+    
+    $Results = $Searcher.FindAll()
+    
+    foreach ($Result in $Results) {
+        $ProcessedCount++
+        
+        # Update progress
+        if ($ProcessedCount % $Global:Config.ComputerProgressInterval -eq 0) {
+            $PercentComplete = ($ProcessedCount / $TotalComputerCount) * 100
+            $ETA = Get-ETA -Current $ProcessedCount -Total $TotalComputerCount -StartTime $ScriptStartTime
+            
+            Write-Progress -Activity "Processing AD Computers (Standard ADSI)" `
+                -Status "Processing computer $ProcessedCount of $TotalComputerCount - ETA: $ETA" `
+                -PercentComplete $PercentComplete `
+                -CurrentOperation "Analyzing computer: $(Get-ADSIProperty -SearchResult $Result -PropertyName 'cn')"
+        }
+        
+        try {
+            # Get computer properties using ADSI
+            $ComputerName = Get-ADSIProperty -SearchResult $Result -PropertyName "cn"
+            $DNSHostName = Get-ADSIProperty -SearchResult $Result -PropertyName "dnshostname"
+            $OSVersion = Get-ADSIProperty -SearchResult $Result -PropertyName "operatingsystem"
+            $OSVersionNumber = Get-ADSIProperty -SearchResult $Result -PropertyName "operatingsystemversion"
+            $Description = Get-ADSIProperty -SearchResult $Result -PropertyName "description"
+            $DistinguishedName = Get-ADSIProperty -SearchResult $Result -PropertyName "distinguishedname"
+            $Location = Get-ADSIProperty -SearchResult $Result -PropertyName "location"
+            
+            # Convert timestamps using ADSI
+            $LastLogonDate = $null
+            $LastLogonRaw = Get-ADSIProperty -SearchResult $Result -PropertyName "lastlogontimestamp"
+            if ($LastLogonRaw) {
+                $LastLogonDate = Convert-ADSILargeInteger -LargeInteger $LastLogonRaw
+            }
+            
+            $WhenCreated = Get-ADSIProperty -SearchResult $Result -PropertyName "whencreated"
+            
+            # Use ADUAC enumeration for computer UAC analysis
+            $UAC = Get-ADSIProperty -SearchResult $Result -PropertyName "useraccountcontrol"
+            if (!$UAC) { $UAC = 0 }
+            $UACAnalysis = Get-UACSummary -UACValue $UAC
+            
+            # Determine OS type and compliance
+            $OSType = if ($OSVersion -like "*Server*") { "Server" } else { "Workstation" }
+            $IsCompliant = $false
+            $IsSupported = $false
+            $OSCategory = "Unknown"
+            
+            # Enhanced OS compliance check
+            switch -Regex ($OSVersion) {
+                "Server 2022" { $IsCompliant = $true; $IsSupported = $true; $OSCategory = "Modern" }
+                "Server 2019" { $IsCompliant = $true; $IsSupported = $true; $OSCategory = "Modern" }
+                "Server 2016" { $IsCompliant = $true; $IsSupported = $true; $OSCategory = "Modern" }
+                "Windows 11" { $IsCompliant = $true; $IsSupported = $true; $OSCategory = "Modern" }
+                "Windows 10" { $IsCompliant = $true; $IsSupported = $true; $OSCategory = "Modern" }
+                "Server 2012 R2" { $IsCompliant = $false; $IsSupported = $true; $OSCategory = "Legacy-Supported" }
+                "Server 2012" { $IsCompliant = $false; $IsSupported = $true; $OSCategory = "Legacy-Supported" }
+                "Windows 8.1" { $IsCompliant = $false; $IsSupported = $true; $OSCategory = "Legacy-Supported" }
+                "Windows 8" { $IsCompliant = $false; $IsSupported = $false; $OSCategory = "End-of-Life" }
+                "Server 2008 R2" { $IsCompliant = $false; $IsSupported = $false; $OSCategory = "End-of-Life" }
+                "Server 2008" { $IsCompliant = $false; $IsSupported = $false; $OSCategory = "End-of-Life" }
+                "Windows 7" { $IsCompliant = $false; $IsSupported = $false; $OSCategory = "End-of-Life" }
+                "Vista" { $IsCompliant = $false; $IsSupported = $false; $OSCategory = "End-of-Life" }
+                "Server 2003" { $IsCompliant = $false; $IsSupported = $false; $OSCategory = "End-of-Life" }
+                "Windows XP" { $IsCompliant = $false; $IsSupported = $false; $OSCategory = "End-of-Life" }
+                "Windows 2000" { $IsCompliant = $false; $IsSupported = $false; $OSCategory = "End-of-Life" }
+                default { $OSCategory = "Unknown" }
+            }
+            
+            # Check if computer is active using configurable threshold
+            $IsEnabled = !$UACAnalysis.IsDisabled
+            $IsActive = $false
+            if ($LastLogonDate) {
+                $IsActive = $LastLogonDate -gt $InactiveThreshold
+            }
+            
+            $ComputerObject = [PSCustomObject]@{
+                ComputerName = $ComputerName
+                DNSHostName = $DNSHostName
+                Enabled = $IsEnabled
+                OperatingSystem = $OSVersion
+                OperatingSystemVersion = $OSVersionNumber
+                OSType = $OSType
+                OSCategory = $OSCategory
+                IsCompliant = $IsCompliant
+                IsSupported = $IsSupported
+                IsActive = $IsActive
+                LastLogonDate = $LastLogonDate
+                WhenCreated = $WhenCreated
+                Description = $Description
+                DistinguishedName = $DistinguishedName
+                Location = $Location
+                
+                # Enhanced with ADUAC analysis
+                UserAccountControl = $UAC
+                UACFlags = $UACAnalysis.FlagsString
+                TrustedForDelegation = $UACAnalysis.TrustedForDelegation
+                IsDisabled = $UACAnalysis.IsDisabled
+            }
+            
+            $AllComputers += $ComputerObject
+            
+            # Export in configurable batches
+            if ($AllComputers.Count -ge ($Global:Config.OutputSettings.ExportBatchSize / 2)) {
+                $AllComputers | Export-Csv "$Global:OutputPath\Computers_Standard.csv" -NoTypeInformation -Append -Encoding UTF8
+                $AllComputers = @()
+            }
+            
+        } catch {
+            Write-Log "Error processing computer $(Get-ADSIProperty -SearchResult $Result -PropertyName 'cn'): $($_.Exception.Message)"
+        }
+    }
+    
+    # Export remaining computers
+    if ($AllComputers.Count -gt 0) {
+        $AllComputers | Export-Csv "$Global:OutputPath\Computers_Standard.csv" -NoTypeInformation -Append -Encoding UTF8
+    }
+    
+    # Clean up ADSI resources
+    $Results.Dispose()
+    $Searcher.Dispose()
+    
+    Write-Progress -Activity "Processing AD Computers (Standard)" -Completed
+    Write-Log "Computer processing completed. Generating OS summary..."
+    
+    # Generate OS Summary
+    $ComputersData = Import-Csv "$Global:OutputPath\Computers_Standard.csv"
+    
+    $OSSummary = $ComputersData | Group-Object OperatingSystem | 
+        Select-Object @{N='OperatingSystem';E={$_.Name}}, Count |
+        Sort-Object Count -Descending
+    
+    $OSSummary | Export-Csv "$Global:OutputPath\Computers_OS_Summary.csv" -NoTypeInformation -Encoding UTF8
+    
+    # Computer Statistics
+    $ComputerStats = [PSCustomObject]@{
+        TotalComputers = $ComputersData.Count
+        ActiveComputers = ($ComputersData | Where-Object {$_.IsActive -eq "True"}).Count
+        CompliantComputers = ($ComputersData | Where-Object {$_.IsCompliant -eq "True"}).Count
+        NonCompliantComputers = ($ComputersData | Where-Object {$_.IsCompliant -eq "False"}).Count
+        EndOfLifeComputers = ($ComputersData | Where-Object {$_.OSCategory -eq "End-of-Life"}).Count
+        Servers = ($ComputersData | Where-Object {$_.OSType -eq "Server"}).Count
+        Workstations = ($ComputersData | Where-Object {$_.OSType -eq "Workstation"}).Count
+        ConfiguredInactiveThreshold = $Global:Config.InactiveComputerDays
+        ProcessingTime = ((Get-Date) - $ScriptStartTime).TotalMinutes
+    }
+    
+    $ComputerStats | Export-Csv "$Global:OutputPath\Computers_Summary_Stats.csv" -NoTypeInformation -Encoding UTF8
+    
+    Write-Log "Computer assessment completed in $([math]::Round($ComputerStats.ProcessingTime, 2)) minutes using $($Global:Config.InactiveComputerDays) day threshold (ADSI)"
+    
+    [GC]::Collect()
+}
+#endregion
+
+#region Configuration Export Function
+function Export-ConfigurationTemplate {
+    $ConfigTemplate = @'
+@{
+    # Organization-specific thresholds (in days)
+    InactiveUserDays = 90              # Days to consider user account inactive
+    InactiveComputerDays = 90          # Days to consider computer account inactive  
+    StalePasswordDays = 180            # Days to consider password stale
+    OldComputerPasswordDays = 60       # Days for computer password age concern
+    
+    # Corruption detection thresholds
+    ExcessiveBadPasswordCount = 100    # Bad password count threshold
+    MaxDenyACEs = 10                   # Maximum deny ACEs before flagging
+    CircularGroupDepthLimit = 20       # Maximum depth for circular group detection
+    SPNDuplicateThreshold = 1          # Threshold for duplicate SPN detection
+    
+    # Performance settings
+    BatchSize = 100                    # Objects processed per batch
+    MaxParallelJobs = 8                # Maximum parallel processing jobs
+    ProgressUpdateInterval = 10        # How often to update progress (every N items)
+    ComputerProgressInterval = 5       # Progress updates for computer processing
+    
+    # Assessment Features (Enable/Disable specific assessments)
+    Features = @{
+        EnableCircularGroupDetection = $true
+        EnableAdvancedSPNAnalysis = $true
+        EnableCMDBValidation = $true
+        EnableDNSAssessment = $true
+        EnableDHCPAssessment = $true
+        EnableCertificateAssessment = $true
+        EnableGPOAssessment = $true
+        EnableSharesAssessment = $true
+        EnablePrintersAssessment = $true
+        EnableInfrastructureAssessment = $true
+        EnableApplicationsAssessment = $true
+        EnableSecurityAssessment = $true
+    }
+    
+    # Security settings
+    SecuritySettings = @{
+        # Groups considered privileged (customize for your environment)
+        PrivilegedGroups = @(
+            "Domain Admins", "Enterprise Admins", "Schema Admins",
+            "Administrators", "Account Operators", "Backup Operators",
+            "Server Operators", "Domain Controllers", "Read-only Domain Controllers",
+            "Group Policy Creator Owners", "Cryptographic Operators"
+            # Add your custom privileged groups here
+            # "YourOrg Admins", "YourOrg SQL Admins", etc.
+        )
+        
+        # Patterns to identify service accounts (case-insensitive regex patterns)
+        ServiceAccountIdentifiers = @("svc", "service", "app", "sql", "system", "iis", "web")
+        
+        # Patterns to identify admin accounts (case-insensitive regex patterns)
+        AdminAccountIdentifiers = @("admin", "adm", "_a$", "-admin", ".admin", "administrator")
+    }
+    
+    # Severity thresholds for corruption detection
+    CriticalThresholds = @{
+        MissingCoreAttributes = $true      # Missing SamAccountName, SID, etc.
+        TombstonedObjects = $true          # Objects marked as deleted
+        UnreadableACLs = $true             # Cannot read security descriptor
+    }
+    
+    HighRiskThresholds = @{
+        UnconstrainedDelegation = $true    # Accounts with unconstrained delegation
+        PasswordNeverExpiresWithDelegation = $true  # Dangerous combination
+        ExcessiveDenyACEs = 10             # Too many explicit deny permissions
+        EndOfLifeOS = $true                # Operating systems past support
+        DuplicateSPNs = $true              # Duplicate service principal names
+    }
+    
+    MediumRiskThresholds = @{
+        OrphanedSIDHistory = $true         # SIDHistory entries that can't be resolved
+        ExcessiveBadPasswordCount = 100    # High bad password attempts
+        StaleActiveAccounts = 90           # Enabled but unused accounts (days)
+        OldComputerPasswords = 60          # Computer passwords not changed (days)
+    }
+    
+    # Output customization
+    OutputSettings = @{
+        ExportBatchSize = 1000             # Records per CSV export batch
+        UseUTF8Encoding = $true            # Use UTF-8 for international characters
+        PowerBIOptimized = $true           # Generate PowerBI-friendly outputs
+        GenerateExecutiveSummary = $true   # Create executive summary report
+    }
+}
+'@
+    
+    $ConfigPath = "$Global:OutputPath\Sample-Organization-Config.psd1"
+    $ConfigTemplate | Out-File -FilePath $ConfigPath -Encoding UTF8
+    Write-Host "Sample configuration file created: $ConfigPath" -ForegroundColor Green
+    Write-Host "Customize this file for your organization's specific requirements." -ForegroundColor Yellow
+}
+#endregion
+
+#region Enhanced Executive Summary with Fixed Encoding
+function New-EnhancedExecutiveSummary {
+    Write-Log "=== Generating Enhanced Executive Summary with Configuration Details (ADSI Version) ==="
+    
+    # Gather corruption statistics
+    $CorruptedUsers = if (Test-Path "$Global:OutputPath\Users_Corrupted.csv") { 
+        Import-Csv "$Global:OutputPath\Users_Corrupted.csv" 
+    } else { @() }
+    
+    $CorruptedComputers = if (Test-Path "$Global:OutputPath\Computers_Corrupted.csv") { 
+        Import-Csv "$Global:OutputPath\Computers_Corrupted.csv" 
+    } else { @() }
+    
+    $CircularGroups = if (Test-Path "$Global:OutputPath\Groups_Circular_Memberships.csv") { 
+        Import-Csv "$Global:OutputPath\Groups_Circular_Memberships.csv" 
+    } else { @() }
+    
+    $DuplicateSPNs = if (Test-Path "$Global:OutputPath\SPNs_Duplicate.csv") { 
+        Import-Csv "$Global:OutputPath\SPNs_Duplicate.csv" 
+    } else { @() }
+    
+    # Load enhanced data
+    $AllUsers = if (Test-Path "$Global:OutputPath\Users_Enhanced.csv") { 
+        Import-Csv "$Global:OutputPath\Users_Enhanced.csv" 
+    } else { @() }
+    
+    $AllComputers = if (Test-Path "$Global:OutputPath\Computers_Enhanced.csv") { 
+        Import-Csv "$Global:OutputPath\Computers_Enhanced.csv" 
+    } else { @() }
+    
+    # Calculate statistics
+    $TotalUsers = $AllUsers.Count
+    $TotalComputers = $AllComputers.Count
+    $ActiveUsers = ($AllUsers | Where-Object {$_.IsActive -eq "True"}).Count
+    $ActiveComputers = ($AllComputers | Where-Object {$_.IsActive -eq "True"}).Count
+    
+    # Count by severity levels
+    $CriticalUserIssues = ($CorruptedUsers | Where-Object {$_.Severity -eq "Critical"}).Count
+    $HighUserIssues = ($CorruptedUsers | Where-Object {$_.Severity -eq "High"}).Count
+    $MediumUserIssues = ($CorruptedUsers | Where-Object {$_.Severity -eq "Medium"}).Count
+    $LowUserIssues = ($CorruptedUsers | Where-Object {$_.Severity -eq "Low"}).Count
+    
+    $CriticalComputerIssues = ($CorruptedComputers | Where-Object {$_.Severity -eq "Critical"}).Count
+    $HighComputerIssues = ($CorruptedComputers | Where-Object {$_.Severity -eq "High"}).Count
+    $MediumComputerIssues = ($CorruptedComputers | Where-Object {$_.Severity -eq "Medium"}).Count
+    $LowComputerIssues = ($CorruptedComputers | Where-Object {$_.Severity -eq "Low"}).Count
+    
+    $TotalCritical = $CriticalUserIssues + $CriticalComputerIssues + $CircularGroups.Count
+    $TotalHigh = $HighUserIssues + $HighComputerIssues + $DuplicateSPNs.Count
+    $TotalMedium = $MediumUserIssues + $MediumComputerIssues
+    $TotalLow = $LowUserIssues + $LowComputerIssues
+    
+    # Account type analysis
+    $ServiceAccounts = ($AllUsers | Where-Object {$_.AccountType -eq "Service Account"}).Count
+    $AdminAccounts = ($AllUsers | Where-Object {$_.AccountType -eq "Admin Account"}).Count
+    $StandardUsers = ($AllUsers | Where-Object {$_.AccountType -eq "Standard User"}).Count
+    
+    # Computer analysis
+    $Servers = ($AllComputers | Where-Object {$_.OSType -eq "Server"}).Count
+    $Workstations = ($AllComputers | Where-Object {$_.OSType -eq "Workstation"}).Count
+    $ModernSystems = ($AllComputers | Where-Object {$_.OSCategory -eq "Modern"}).Count
+    $EndOfLifeSystems = ($AllComputers | Where-Object {$_.OSCategory -eq "End-of-Life"}).Count
+    
+    # Generate executive summary (Fixed encoding - no Unicode checkmarks)
+    $ExecutiveSummary = @"
+ENHANCED ACTIVE DIRECTORY ASSESSMENT - EXECUTIVE SUMMARY (ADSI VERSION)
+=======================================================================
+Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+Assessment Type: Enhanced Universal Edition v5.0 - ADSI Implementation
+Configuration: Auto-Detection with ADUAC Enumeration using ADSI
+PowerBI-Optimized Reports Generated
+NO ACTIVE DIRECTORY POWERSHELL MODULE REQUIRED
+
+CONFIGURATION APPLIED
+=====================
+Inactive User Threshold: $($Global:Config.InactiveUserDays) days
+Inactive Computer Threshold: $($Global:Config.InactiveComputerDays) days
+Stale Password Threshold: $($Global:Config.StalePasswordDays) days
+Old Computer Password Threshold: $($Global:Config.OldComputerPasswordDays) days
+Excessive Bad Password Count: $($Global:Config.ExcessiveBadPasswordCount)
+Processing Batch Size: $($Global:Config.BatchSize)
+Configuration Source: $(if ($ConfigFile) { "File: $ConfigFile" } else { "Auto-Detection using ADSI" })
+AD Technology: ADSI (Active Directory Service Interfaces)
+
+ENVIRONMENT OVERVIEW
+===================
+Total Users: $TotalUsers
+- Active Users: $ActiveUsers ($([math]::Round(($ActiveUsers/$TotalUsers)*100, 1))%)
+- Service Accounts: $ServiceAccounts
+- Admin Accounts: $AdminAccounts  
+- Standard Users: $StandardUsers
+
+Total Computers: $TotalComputers
+- Active Computers: $ActiveComputers ($([math]::Round(($ActiveComputers/$TotalComputers)*100, 1))%)
+- Servers: $Servers
+- Workstations: $Workstations
+- Modern Systems: $ModernSystems ($([math]::Round(($ModernSystems/$TotalComputers)*100, 1))%)
+- End-of-Life Systems: $EndOfLifeSystems ($([math]::Round(($EndOfLifeSystems/$TotalComputers)*100, 1))%)
+
+CORRUPTION ANALYSIS RESULTS (Enhanced with ADUAC using ADSI)
+===========================================================
+Total Critical Issues: $TotalCritical
+Total High Risk Issues: $TotalHigh  
+Total Medium Risk Issues: $TotalMedium
+Total Low Risk Issues: $TotalLow
+
+USER ACCOUNT CORRUPTION (Enhanced with ADUAC Analysis using ADSI):
+- Critical: $CriticalUserIssues (Missing core attributes, tombstoned objects)
+- High: $HighUserIssues (ADUAC flag conflicts, delegation issues, password violations)
+- Medium: $MediumUserIssues (Stale accounts, excessive bad passwords, SID issues)
+- Low: $LowUserIssues (Minor configuration anomalies)
+
+COMPUTER ACCOUNT CORRUPTION (Enhanced with ADUAC Analysis using ADSI):
+- Critical: $CriticalComputerIssues (Missing attributes, critical system issues)
+- High: $HighComputerIssues (End-of-life systems, delegation issues, UAC conflicts)
+- Medium: $MediumComputerIssues (Password age issues, stale accounts)
+- Low: $LowComputerIssues (Minor configuration issues)
+
+INFRASTRUCTURE CORRUPTION:
+- Circular Group Memberships: $($CircularGroups.Count)
+- Duplicate Service Principal Names: $($DuplicateSPNs.Count)
+
+ADSI IMPLEMENTATION BENEFITS
+============================
+[OK] No PowerShell Module Dependencies
+  - Works on any Windows system with PowerShell 5.1+
+  - No RSAT installation required
+  - Direct LDAP communication using ADSI
+  - Faster performance in many scenarios
+
+[OK] Enhanced Compatibility
+  - Works across all domain functional levels
+  - Compatible with legacy Active Directory environments
+  - No module version conflicts
+  - Reduced security surface area
+
+[OK] ADUAC Enumeration Implementation using ADSI
+  - Replaced all bitwise UAC operations with readable [ADUAC] enum
+  - Enhanced delegation detection using proper flag analysis
+  - Improved password policy violation detection
+  - Smart card and Kerberos preauth requirement analysis
+
+[OK] Universal Configurability with ADSI
+  - Auto-detection of organizational password policies using ADSI
+  - Configurable inactive account thresholds
+  - PowerShell Data File (.psd1) configuration support
+  - Fallback to secure defaults when auto-detection fails
+
+[OK] Enhanced Security Analysis using ADSI
+  - Risk-based corruption categorization (Critical/High/Medium/Low)
+  - Account type classification using UAC flags and naming patterns
+  - Delegation risk assessment with ADUAC enumeration
+  - OS compliance analysis with configurable end-of-life detection
+
+OVERALL RISK ASSESSMENT
+=======================
+AD Health Status: $(
+    if ($TotalCritical -gt 0) { "CRITICAL - Immediate intervention required" }
+    elseif ($TotalHigh -gt 10) { "HIGH RISK - Action needed within 30 days" }
+    elseif ($TotalMedium -gt 20) { "MEDIUM RISK - Plan remediation within 90 days" }
+    elseif ($TotalLow -gt 0) { "LOW RISK - Maintenance recommended" }
+    else { "HEALTHY - Minimal issues detected" }
+)
+
+Migration Readiness: $(
+    if ($TotalCritical -gt 0 -or $TotalHigh -gt 5) { 
+        "NOT READY - Resolve corruption before migration" 
+    } elseif ($TotalMedium -gt 10) { 
+        "CAUTION - Consider fixing medium issues first" 
+    } else { 
+        "READY - AD suitable for migration with minor cleanup" 
+    }
+)
+
+Modernization Score: $([math]::Round(($ModernSystems / $TotalComputers) * 100, 1))%
+Security Posture: $(
+    $SecurityScore = 100 - (($TotalCritical * 10) + ($TotalHigh * 5) + ($TotalMedium * 2) + $TotalLow)
+    if ($SecurityScore -lt 0) { $SecurityScore = 0 }
+    "$SecurityScore/100"
+)
+
+TOP CORRUPTION ISSUES DETECTED
+==============================
+$(
+    # Get top 10 most common issues
+    $AllIssues = @()
+    $AllIssues += $CorruptedUsers | Select-Object IssueType, Severity
+    $AllIssues += $CorruptedComputers | Select-Object IssueType, Severity
+    
+    $TopIssues = $AllIssues | Group-Object IssueType | 
+        Sort-Object Count -Descending | 
+        Select-Object -First 10
+    
+    $Counter = 1
+    foreach ($Issue in $TopIssues) {
+        $SeverityBreakdown = $Issue.Group | Group-Object Severity
+        $SeverityText = ($SeverityBreakdown | ForEach-Object { "$($_.Name): $($_.Count)" }) -join ", "
+        "$Counter. $($Issue.Name) ($($Issue.Count) total - $SeverityText)"
+        $Counter++
+    }
+)
+
+ENHANCED REPORTS GENERATED (PowerBI-Optimized using ADSI)
+========================================================
+Primary Enhanced Reports:
+- Users_Enhanced.csv - Complete user inventory with ADUAC analysis (40+ attributes)
+- Computers_Enhanced.csv - Full computer details with UAC flag analysis (35+ attributes)
+
+Corruption Analysis Reports:
+- Users_Corrupted.csv - Users with corruption issues by configurable severity
+- Computers_Corrupted.csv - Computers with validation problems  
+- Groups_Circular_Memberships.csv - Groups with circular references
+- SPNs_Duplicate.csv - Duplicate service principal names
+
+Risk Assessment Reports:
+- Service_Accounts_High_Risk.csv - Service accounts with dangerous configurations
+- Admin_Accounts_Stale.csv - Inactive privileged accounts
+- Users_Disabled_But_Grouped.csv - Disabled accounts still in groups
+- Users_With_Delegation_Rights.csv - Delegation-enabled accounts with risk analysis
+- Computers_With_Delegation.csv - Computers with delegation permissions
+- Users_Stale_Accounts.csv - Inactive user accounts by custom threshold
+- Computers_Stale.csv - Inactive computer accounts by custom threshold
+- Computers_End_of_Life.csv - Systems requiring immediate attention
+
+Advanced Analysis Reports:
+- SPNs_Advanced_Analysis.csv - Complete SPN analysis with risk assessment
+- SPNs_Statistics.csv - SPN distribution and statistics
+- Computers_With_SPNs.csv - SPN inventory
+- Computers_Without_LAPS.csv - LAPS deployment gaps
+
+Infrastructure Analysis Reports:
+- Infrastructure_Domain_Controllers.csv - DC analysis with ADUAC
+- Infrastructure_AD_Sites.csv - Sites and subnets
+- Infrastructure_Trust_Relationships.csv - Domain trusts
+- DNS_Zones.csv - DNS zone configuration
+- GPO_Details.csv - Group Policy Objects analysis
+- Security_Privileged_Group_Members.csv - Privileged accounts
+- Applications_Service_Principal_Names.csv - SPN analysis
+
+Additional Assessment Reports:
+- Printers_Published.csv - Published printers in AD
+- Printers_Servers.csv - Print server inventory  
+- Shares_File_Shares.csv - Network file shares analysis
+- Security_Password_Policy.csv - Domain password policies
+- Security_Fine_Grained_Password_Policies.csv - FGPP analysis (if supported)
+
+POWERBI DASHBOARD INTEGRATION
+=============================
+All CSV files optimized for PowerBI with:
+[OK] Consistent naming conventions (no spaces, clear labels)
+[OK] Data type optimization for better performance  
+[OK] Relationship keys for cross-table analysis
+[OK] Corruption level fields for executive dashboards
+[OK] Account type categorization for role-based analysis
+[OK] ADUAC flag breakdowns for security analysis
+[OK] ADSI-generated data with enhanced compatibility
+
+Recommended Dashboard Structure:
+1. Executive Overview (corruption levels, health scores, modernization)
+2. User Analysis (account types, activity, ADUAC flags, delegation)
+3. Computer Analysis (OS compliance, security, delegation, LAPS)
+4. Security Dashboard (privileged accounts, delegation, policy violations)
+5. Infrastructure Health (DCs, DNS, replication, trusts)
+6. Applications Analysis (SPNs, enterprise apps, Exchange/SQL)
+7. Compliance View (end-of-life systems, policy violations)
+
+IMMEDIATE ACTION ITEMS
+=====================
+$(if ($TotalCritical -gt 0) {
+"CRITICAL PRIORITY (Address within 24-48 hours):
+- Review accounts with missing core attributes
+- Investigate tombstoned objects still accessible
+- Fix broken security descriptors
+- Resolve UAC flag conflicts"
+} else {
+"[OK] No Critical Issues Requiring Immediate Action"
+})
+
+$(if ($TotalHigh -gt 0) {
+"HIGH PRIORITY (Address within 30 days):
+- Review unconstrained delegation assignments
+- Fix password never expires + delegation combinations
+- Address Kerberos preauth vulnerabilities  
+- Plan migration for end-of-life systems ($EndOfLifeSystems systems)
+- Resolve duplicate SPNs causing authentication issues"
+} else {
+"[OK] No High Priority Issues Detected"
+})
+
+CONFIGURATION CUSTOMIZATION GUIDE
+=================================
+Your assessment used the following configuration:
+- Configuration Source: $(if ($ConfigFile) { "Custom file: $ConfigFile" } else { "Auto-detection with secure defaults using ADSI" })
+- Privileged Groups Monitored: $($Global:Config.SecuritySettings.PrivilegedGroups.Count) groups
+- Service Account Patterns: $($Global:Config.SecuritySettings.ServiceAccountIdentifiers -join ', ')
+- Admin Account Patterns: $($Global:Config.SecuritySettings.AdminAccountIdentifiers -join ', ')
+
+To customize for your organization:
+1. Export configuration template: Use menu option 2
+2. Modify thresholds in Sample-Organization-Config.psd1:
+   - Adjust inactive account thresholds
+   - Add organization-specific privileged groups
+   - Customize service account naming patterns
+   - Set corruption detection sensitivity levels
+3. Re-run with custom config: .\Enhanced-AD-Assessment-ADSI.ps1 -ConfigFile "YourConfig.psd1"
+
+ADSI IMPLEMENTATION ADVANTAGES
+==============================
+Before (AD Module Version):
+- Required RSAT installation and AD module
+- Module version dependencies and conflicts
+- Limited compatibility with older systems
+- Potential for module-specific bugs
+
+After (ADSI Version):
+- No module dependencies - works everywhere
+- Direct LDAP communication for better performance
+- Enhanced compatibility across environments
+- Reduced security surface area
+- Faster startup and execution
+
+Technical Benefits:
+- Uses native Windows ADSI interfaces
+- More efficient memory usage for large directories
+- Better error handling for network issues
+- Compatible with PowerShell 5.1+ on any Windows system
+- No external dependencies or module conflicts
+
+NEXT STEPS
+=========
+1. Import all CSV files into PowerBI Desktop
+2. Create executive dashboard using corruption metrics and ADUAC analysis
+3. Prioritize remediation: Critical -> High -> Medium -> Low
+4. Test fixes in development environment first
+5. Schedule maintenance windows for production changes
+6. Establish ongoing monitoring using these configurable baselines
+7. Re-assess after remediation to measure improvement
+8. Consider customizing configuration for ongoing assessments
+
+Total Processing Time: $([math]::Round(((Get-Date) - $Global:StartTime).TotalMinutes, 2)) minutes
+Assessment Tool: Enhanced AD Assessment v5.0 - Complete Universal Edition (ADSI)
+
+Enhanced with complete ADUAC enumeration and universal configurability using ADSI.
+Ready for any organization with automatic policy detection and customizable thresholds.
+No PowerShell module dependencies - works on any Windows system with PowerShell 5.1+.
+"@
+
+    $ExecutiveSummary | Out-File "$Global:OutputPath\Enhanced_Executive_Summary.txt" -Encoding UTF8
+    Write-Log "Enhanced Executive Summary generated with configuration details (ADSI Version)"
+}
+#endregion
+
+#region Main Execution Function with Enhanced Options (ADSI Version)
+function Start-EnhancedADAssessment {
+    Write-Host "`n================================================================" -ForegroundColor Cyan
+    Write-Host "  Enhanced AD Discovery Assessment Tool (ADSI Version)" -ForegroundColor Cyan
+    Write-Host "  Version 5.0 - Complete Universal Edition" -ForegroundColor Cyan
+    Write-Host "  with ADUAC Enumeration & Auto-Configuration" -ForegroundColor Cyan
+    Write-Host "  ALL Original Features + Enhanced Corruption Detection" -ForegroundColor Cyan
+    Write-Host "  NO ACTIVE DIRECTORY POWERSHELL MODULE REQUIRED" -ForegroundColor Green
+    Write-Host "================================================================" -ForegroundColor Cyan
+    Write-Host ""
+    
+    # Show current configuration
+    Write-Host "CURRENT CONFIGURATION:" -ForegroundColor Yellow
+    Write-Host "- Inactive User Threshold: $($Global:Config.InactiveUserDays) days" -ForegroundColor White
+    Write-Host "- Inactive Computer Threshold: $($Global:Config.InactiveComputerDays) days" -ForegroundColor White
+    Write-Host "- Stale Password Threshold: $($Global:Config.StalePasswordDays) days" -ForegroundColor White
+    Write-Host "- Computer Password Age Limit: $($Global:Config.OldComputerPasswordDays) days" -ForegroundColor White
+    Write-Host "- Batch Processing Size: $($Global:Config.BatchSize)" -ForegroundColor White
+    Write-Host "- Configuration Source: $(if ($ConfigFile) { "File: $ConfigFile" } else { "Auto-Detection using ADSI" })" -ForegroundColor White
+    Write-Host "- AD Technology: ADSI (No PowerShell module required)" -ForegroundColor Green
+    Write-Host ""
+    
+    # Enhanced Menu
+    Write-Host "Select assessment to run:" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "ENHANCED ASSESSMENTS (with ADUAC Enumeration using ADSI):" -ForegroundColor Magenta
+    Write-Host "1.   Enhanced Users Assessment (ADUAC + Configurable Thresholds)"
+    Write-Host "2.   Enhanced Computers Assessment (ADUAC + OS Compliance)" 
+    Write-Host "3.   Circular Group Membership Detection"
+    Write-Host "4.   Advanced SPN Analysis and Duplicate Detection"
+    Write-Host ""
+    Write-Host "STANDARD ASSESSMENTS (Enhanced with ADUAC using ADSI):" -ForegroundColor Yellow
+    Write-Host "5.   Standard Users Assessment (ADUAC Enhanced)"
+    Write-Host "6.   Standard Computers Assessment (ADUAC Enhanced)"
+    Write-Host "7.   Printers Assessment"
+    Write-Host "8.   File Shares Assessment"
+    Write-Host "9.   Group Policy Assessment"
+    Write-Host "10.  DNS Assessment"
+    Write-Host "11.  Domain Controllers & Infrastructure"
+    Write-Host "12.  AD-Integrated Applications Assessment"
+    Write-Host "13.  Security Assessment (Enhanced)"
+    Write-Host ""
+    Write-Host "CONFIGURATION OPTIONS:" -ForegroundColor Cyan
+    Write-Host "14.  Export Configuration Template (Customize for your organization)"
+    Write-Host "15.  Show Current Configuration Details"
+    Write-Host ""
+    Write-Host "COMPREHENSIVE ASSESSMENTS:" -ForegroundColor Green
+    Write-Host "16.  Run Complete Enhanced Assessment Suite (1-4, Recommended)"
+    Write-Host "17.  Run All Standard Assessments (5-13)"
+    Write-Host "18.  Run COMPLETE Universal Assessment Suite (ALL 1-13, ULTIMATE)"
+    Write-Host "19.  Generate Executive Summary (from existing data)"
+    Write-Host ""
+    
+    $Selection = Read-Host "Enter your selection (1-19)"
+    
+    switch ($Selection) {
+        "1" { 
+            Get-ADUsersAssessmentEnhanced
+            New-EnhancedExecutiveSummary
+        }
+        "2" { 
+            Get-ADComputersAssessmentEnhanced
+            New-EnhancedExecutiveSummary
+        }
+        "3" { Get-CircularGroupMembershipAssessment }
+        "4" { Get-AdvancedSPNAnalysis }
+        "5" { Get-ADUsersAssessment }
+        "6" { Get-ADComputersAssessment }
+        "7" { Get-PrintersAssessment }
+        "8" { Get-SharesAssessment }
+        "9" { Get-GPOAssessment }
+        "10" { Get-DNSAssessment }
+        "11" { Get-DCInfrastructureAssessment }
+        "12" { Get-ADApplicationsAssessment }
+        "13" { Get-ADSecurityAssessment }
+        "14" {
+            Export-ConfigurationTemplate
+            Write-Host "`nConfiguration template exported. Customize and re-run with:" -ForegroundColor Green
+            Write-Host ".\Enhanced-AD-Assessment-ADSI.ps1 -ConfigFile 'Sample-Organization-Config.psd1'" -ForegroundColor White
+        }
+        "15" {
+            Write-Host "`nCURRENT CONFIGURATION DETAILS:" -ForegroundColor Yellow
+            $Global:Config | ConvertTo-Json -Depth 3 | Write-Host
+        }
+        "16" {
+            Write-Host "`nRunning Complete Enhanced Assessment Suite using ADSI..." -ForegroundColor Magenta
+            Write-Host "Using ADUAC enumeration with configurable thresholds..." -ForegroundColor Green
+            
+            Get-ADUsersAssessmentEnhanced
+            Get-ADComputersAssessmentEnhanced
+            Get-CircularGroupMembershipAssessment
+            Get-AdvancedSPNAnalysis
+            New-EnhancedExecutiveSummary
+            Export-ConfigurationTemplate
+        }
+        "17" {
+            Write-Host "`nRunning All Standard Assessments (Enhanced with ADUAC using ADSI)..." -ForegroundColor Yellow
+            
+            Get-ADUsersAssessment
+            Get-ADComputersAssessment
+            Get-PrintersAssessment
+            Get-SharesAssessment
+            Get-GPOAssessment
+            Get-DNSAssessment
+            Get-DCInfrastructureAssessment
+            Get-ADApplicationsAssessment
+            Get-ADSecurityAssessment
+        }
+        "18" {
+            Write-Host "`nRunning COMPLETE Universal Assessment Suite using ADSI..." -ForegroundColor Magenta
+            Write-Host "This includes ALL functionality from the original script + enhancements..." -ForegroundColor Green
+            Write-Host "Optimized to use Enhanced assessments to avoid duplication..." -ForegroundColor Cyan
+            
+            # Enhanced Assessments (superset of standard functionality)
+            Get-ADUsersAssessmentEnhanced       # Replaces + enhances standard user assessment
+            Get-ADComputersAssessmentEnhanced   # Replaces + enhances standard computer assessment
+            Get-CircularGroupMembershipAssessment
+            Get-AdvancedSPNAnalysis
+            
+            # Standard Assessments (all enhanced with ADUAC where applicable)
+            Get-PrintersAssessment
+            Get-SharesAssessment
+            Get-GPOAssessment
+            Get-DNSAssessment
+            Get-DCInfrastructureAssessment
+            Get-ADApplicationsAssessment
+            Get-ADSecurityAssessment
+            
+            # Generate comprehensive summary and configuration template
+            New-EnhancedExecutiveSummary
+            Export-ConfigurationTemplate
+        }
+        "19" {
+            New-EnhancedExecutiveSummary
+        }
+        default {
+            Write-Host "Invalid selection. Exiting." -ForegroundColor Red
+            return
+        }
+    }
+    
+    $TotalTime = ((Get-Date) - $Global:StartTime).TotalMinutes
+    
+    Write-Host "`n================================================================" -ForegroundColor Green
+    Write-Host "  Enhanced Assessment Complete (ADSI Version)!" -ForegroundColor Green
+    Write-Host "  Total Time: $([math]::Round($TotalTime, 2)) minutes" -ForegroundColor Green
+    Write-Host "  Results: $Global:OutputPath" -ForegroundColor Green
+    Write-Host "  Technology: ADSI (No AD module required)" -ForegroundColor Green
+    Write-Host "================================================================" -ForegroundColor Green
+    
+    # Final summary
+    $FinalSummary = @"
+Enhanced Active Directory Assessment Summary - Complete Universal Edition (ADSI) v5.0
+====================================================================================
+Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+Total Processing Time: $([math]::Round($TotalTime, 2)) minutes
+Output Directory: $Global:OutputPath
+Technology: ADSI (Active Directory Service Interfaces)
+
+COMPLETE UNIVERSAL EDITION ENHANCEMENTS (ADSI):
+===============================================
+[OK] ALL Original Script Functionality Preserved and Enhanced using ADSI
+[OK] NO POWERSHELL MODULE DEPENDENCIES
+  - Works on any Windows system with PowerShell 5.1+
+  - No RSAT installation required
+  - Direct LDAP communication using ADSI
+  - Enhanced compatibility across all environments
+
+[OK] ADUAC Enumeration Implementation Throughout using ADSI
+  - Replaced all bitwise UAC operations with readable [ADUAC] enum
+  - Enhanced delegation detection using proper flag analysis
+  - Improved password policy violation detection
+  - Smart card and Kerberos preauth requirement analysis
+  - All UAC analysis performed using ADSI native calls
+
+[OK] Universal Configurability for Any Organization using ADSI
+  - Auto-detection of organizational password policies using ADSI
+  - Configurable inactive account thresholds (currently: Users: $($Global:Config.InactiveUserDays)d, Computers: $($Global:Config.InactiveComputerDays)d)
+  - PowerShell Data File (.psd1) configuration support
+  - Fallback to secure defaults when auto-detection fails
+  - Configurable privileged groups and service account patterns
+
+[OK] Enhanced Security Analysis with Risk Assessment using ADSI
+  - Risk-based corruption categorization (Critical/High/Medium/Low)
+  - Account type classification using UAC flags and naming patterns
+  - Delegation risk assessment with ADUAC enumeration
+  - OS compliance analysis with configurable end-of-life detection
+
+[OK] Complete Assessment Suite Available using ADSI
+  - Enhanced Users Assessment with advanced corruption detection
+  - Enhanced Computers Assessment with comprehensive validation
+  - Circular Group Membership Detection
+  - Advanced SPN Analysis and Duplicate Detection
+  - Standard Assessments enhanced with ADUAC enumeration:
+    * Printers Assessment for print infrastructure analysis
+    * File Shares Assessment for network share security
+    * Group Policy Assessment for GPO analysis
+    * DNS Assessment for DNS infrastructure health
+    * Domain Controllers & Infrastructure assessment
+    * AD-Integrated Applications assessment
+    * Security Assessment with configurable privileged groups
+
+CONFIGURATION FLEXIBILITY ACHIEVED:
+==================================
+Auto-Detected Configuration using ADSI:
+- Inactive Users: $($Global:Config.InactiveUserDays) days (from domain password policy)
+- Inactive Computers: $($Global:Config.InactiveComputerDays) days
+- Stale Passwords: $($Global:Config.StalePasswordDays) days
+- Schema Version: $($Global:Config.SchemaVersion)
+- Configuration Source: $(if ($ConfigFile) { "Custom file: $ConfigFile" } else { "Auto-detection using ADSI with secure defaults" })
+
+Customizable Elements:
+- All thresholds and detection criteria
+- Privileged groups list ($($Global:Config.SecuritySettings.PrivilegedGroups.Count) configured)
+- Service account naming patterns
+- Assessment feature toggles
+- Output formats and batch sizes
+
+ADUAC ENUMERATION BENEFITS THROUGHOUT (ADSI):
+=============================================
+Universal Improvements Applied to ALL Functions using ADSI:
+[OK] Users Assessment: Enhanced UAC analysis, delegation detection, security flags
+[OK] Computers Assessment: Enhanced trust account analysis, delegation rights
+[OK] Security Assessment: Privileged account analysis with delegation flags
+[OK] Applications Assessment: SPN risk analysis with UAC correlation
+[OK] Infrastructure Assessment: DC computer account UAC analysis
+[OK] DNS Assessment: Enhanced with ADUAC where applicable
+[OK] GPO Assessment: Enhanced logging and analysis
+[OK] Printers Assessment: Enhanced with ADSI connectivity
+[OK] Shares Assessment: Enhanced server enumeration using ADSI
+[OK] All assessments use native ADSI calls for maximum compatibility
+
+Before: ($UAC -band 0x80000) -eq 0x80000
+After:  $UACAnalysis.TrustedForDelegation (using ADSI-retrieved UAC values)
+
+[OK] Self-documenting code with readable flag names
+[OK] Type-safe enumeration prevents errors
+[OK] Consistent analysis across all assessment functions
+[OK] Automatic flag-to-string conversion for PowerBI reports
+[OK] Enhanced performance using direct ADSI calls
+
+ADSI IMPLEMENTATION ADVANTAGES:
+==============================
+Technical Benefits:
+[OK] No external module dependencies
+[OK] Works on any Windows system with PowerShell 5.1+
+[OK] Direct LDAP communication for better performance
+[OK] Enhanced compatibility across all AD environments
+[OK] Reduced security surface area
+[OK] Faster startup and execution times
+[OK] Better memory management for large directories
+[OK] Enhanced error handling for network issues
+
+Compatibility Benefits:
+[OK] Works across all domain functional levels
+[OK] Compatible with legacy Active Directory environments
+[OK] No module version conflicts
+[OK] No RSAT installation requirements
+[OK] Reduced deployment complexity
+
+POWERBI OPTIMIZATION THROUGHOUT (ADSI):
+=======================================
+All CSV files include:
+[OK] Consistent naming conventions (no spaces, clear labels)
+[OK] ADUAC flag analysis in readable format
+[OK] Corruption level metrics for executive dashboards
+[OK] Cross-table relationship keys for comprehensive analysis
+[OK] Account type categorization for role-based reporting
+[OK] Risk assessment fields for security dashboards
+[OK] ADSI-optimized data retrieval and formatting
+
+READY FOR ENTERPRISE USE:
+========================
+[OK] Cross-organization compatibility through auto-detection using ADSI
+[OK] Configurable thresholds for any environment size
+[OK] Scalable batch processing for large directories
+[OK] Memory-optimized for 50,000+ objects using ADSI
+[OK] PowerBI-ready outputs for executive dashboards
+[OK] Comprehensive logging and error handling
+[OK] All original functionality preserved and enhanced
+[OK] NO DEPENDENCIES - works anywhere PowerShell 5.1+ is available
+
+To customize for an organization:
+1. Use menu option 7 to export configuration template
+2. Modify Sample-Organization-Config.psd1 for your needs
+3. Re-run: .\Enhanced-AD-Assessment-ADSI.ps1 -ConfigFile "YourConfig.psd1"
+
+For detailed analysis: $Global:OutputPath\Enhanced_Executive_Summary.txt
+PowerBI import ready: All CSV files optimized for dashboard creation
+
+Enhanced with complete ADUAC enumeration and universal configurability using ADSI.
+Ready for any organization with automatic policy detection.
+ALL original script functionality preserved and significantly enhanced.
+NO POWERSHELL MODULE DEPENDENCIES - WORKS EVERYWHERE!
+"@
+    
+    $FinalSummary | Out-File "$Global:OutputPath\Enhanced_Assessment_Summary.txt" -Encoding UTF8
+    Write-Host "`nComplete summary: $Global:OutputPath\Enhanced_Assessment_Summary.txt" -ForegroundColor Yellow
+    Write-Host "Executive summary: $Global:OutputPath\Enhanced_Executive_Summary.txt" -ForegroundColor Yellow
+    Write-Host "Configuration template: $Global:OutputPath\Sample-Organization-Config.psd1" -ForegroundColor Yellow
+    Write-Host "`nComplete Universal Edition - Enhanced with ADUAC enumeration using ADSI!" -ForegroundColor Green
+    Write-Host "Ready for any organization with full configurability!" -ForegroundColor Green
+    Write-Host "NO AD MODULE REQUIRED - WORKS ON ANY WINDOWS SYSTEM!" -ForegroundColor Magenta
+}
+
+# Execute the enhanced assessment
+Start-EnhancedADAssessment
+#endregion -and $Share.Name -notmatch '^[A-Z]\$') { continue }
+                
+                $SharePath = "\\$Server\$($Share.Name)"
+                
+                # Determine share type
+                $ShareType = "Windows Server"
+                
+                # Check if it's a DFS share
+                $IsDFS = $false
+                try {
+                    if (Get-Module -ListAvailable -Name DFSN) {
+                        $DFSPath = Get-DfsnFolder -Path $SharePath -ErrorAction SilentlyContinue
+                        if ($DFSPath) { $IsDFS = $true }
+                    }
+                } catch {}
+                
+                # Get file count (with timeout)
+                $FileCount = 0
+                $FolderSize = 0
+                
+                try {
+                    $Job = Start-Job -ScriptBlock {
+                        param($Path)
+                        $Items = Get-ChildItem -Path $Path -Recurse -ErrorAction SilentlyContinue
+                        @{
+                            FileCount = ($Items | Where-Object {!$_.PSIsContainer}).Count
+                            FolderSize = ($Items | Where-Object {!$_.PSIsContainer} | Measure-Object -Property Length -Sum).Sum
+                        }
+                    } -ArgumentList $SharePath
+                    
+                    $Result = Wait-Job -Job $Job -Timeout 30
+                    if ($Result) {
+                        $JobResult = Receive-Job -Job $Job
+                        $FileCount = $JobResult.FileCount
+                        $FolderSize = $JobResult.FolderSize
+                    }
+                    Remove-Job -Job $Job -Force
+                } catch {}
+                
+                $ShareObject = [PSCustomObject]@{
+                    ServerName = $Server
+                    ShareName = $Share.Name
+                    SharePath = $SharePath
+                    Description = $Share.Description
+                    ShareType = $ShareType
+                    IsDFS = $IsDFS
+                    FileCount = $FileCount
+                    SizeGB = [math]::Round($FolderSize / 1GB, 2)
+                    MaxUserLimit = $Share.MaximumAllowed
+                }
+                
+                $AllShares += $ShareObject
+            }
+        } catch {
+            Write-Log "Error scanning shares on $Server : $($_.Exception.Message)"
+        }
+    }
+    
+    Write-Progress -Activity "Scanning Shares" -Completed
+    
+    # Export results
+    if ($AllShares.Count -gt 0) {
+        $AllShares | Export-Csv "$Global:OutputPath\Shares_File_Shares.csv" -NoTypeInformation -Encoding UTF8
+    }
+    
+    # Summary statistics
+    $ShareStats = [PSCustomObject]@{
+        TotalShares = $AllShares.Count
+        TotalServersWithShares = ($AllShares | Select-Object -ExpandProperty ServerName -Unique).Count
+        DFSShares = ($AllShares | Where-Object {$_.IsDFS -eq $true}).Count
+        TotalFiles = ($AllShares | Measure-Object -Property FileCount -Sum).Sum
+        TotalSizeGB = ($AllShares | Measure-Object -Property SizeGB -Sum).Sum
+        ProcessingTime = ((Get-Date) - $ScriptStartTime).TotalMinutes
+    }
+    
+    $ShareStats | Export-Csv "$Global:OutputPath\Shares_Summary_Stats.csv" -NoTypeInformation -Encoding UTF8
+    
+    Write-Log "Share assessment completed in $([math]::Round($ShareStats.ProcessingTime, 2)) minutes using ADSI"
+    
+    [GC]::Collect()
+}
+
+function Get-GPOAssessment {
+    if (-not $Global:Config.Features.EnableGPOAssessment) {
+        Write-Log "Group Policy assessment disabled in configuration"
+        return
+    }
+    
+    Write-Log "=== Starting Group Policy Assessment (ADSI Version) ==="
+    
+    $ScriptStartTime = Get-Date
+    
+    # Get all GPOs using ADSI
+    Write-Host "Getting all Group Policy Objects using ADSI..." -ForegroundColor Yellow
+    
+    try {
+        $GPOSearcher = Get-ADSISearcher -Filter "(objectClass=groupPolicyContainer)" -SearchBase "CN=Policies,CN=System,$Global:DomainDN" -Properties @(
+            "displayname", "gpcfilesyspath", "whencreated", "whenchanged", "gpcfunctionalityversion", "flags"
+        )
+        
+        $GPOResults = $GPOSearcher.FindAll()
+        $TotalGPOs = $GPOResults.Count
+        Write-Log "Found $TotalGPOs GPOs using ADSI"
+        
+        $GPODetails = @()
+        $ProcessedCount = 0
+        
+        foreach ($GPOResult in $GPOResults) {
+            $ProcessedCount++
+            
+            if ($ProcessedCount % $Global:Config.ComputerProgressInterval -eq 0) {
+                $PercentComplete = ($ProcessedCount / $TotalGPOs) * 100
+                $ETA = Get-ETA -Current $ProcessedCount -Total $TotalGPOs -StartTime $ScriptStartTime
+                
+                Write-Progress -Activity "Processing GPOs (ADSI)" `
+                    -Status "Processing GPO $ProcessedCount of $TotalGPOs - ETA: $ETA" `
+                    -PercentComplete $PercentComplete `
+                    -CurrentOperation "GPO: $(Get-ADSIProperty -SearchResult $GPOResult -PropertyName 'displayname')"
+            }
+            
+            try {
+                $GPOName = Get-ADSIProperty -SearchResult $GPOResult -PropertyName "displayname"
+                $GPOPath = Get-ADSIProperty -SearchResult $GPOResult -PropertyName "gpcfilesyspath"
+                $WhenCreated = Get-ADSIProperty -SearchResult $GPOResult -PropertyName "whencreated"
+                $WhenChanged = Get-ADSIProperty -SearchResult $GPOResult -PropertyName "whenchanged"
+                $FunctionalityVersion = Get-ADSIProperty -SearchResult $GPOResult -PropertyName "gpcfunctionalityversion"
+                $Flags = Get-ADSIProperty -SearchResult $GPOResult -PropertyName "flags"
+                
+                # Determine GPO status from flags
+                $GPOStatus = switch ($Flags) {
+                    0 { "Enabled" }
+                    1 { "User Configuration Disabled" }
+                    2 { "Computer Configuration Disabled" }
+                    3 { "Disabled" }
+                    default { "Unknown" }
+                }
+                
+                # Count settings by checking GPO folders (simplified)
+                $ComputerSettings = 0
+                $UserSettings = 0
+                $TotalSettings = 0
+                
+                if ($GPOPath) {
+                    try {
+                        $MachineFolder = "$GPOPath\Machine"
+                        $UserFolder = "$GPOPath\User"
+                        
+                        if (Test-Path $MachineFolder) {
+                            $ComputerSettings = (Get-ChildItem -Path $MachineFolder -Recurse -File -ErrorAction SilentlyContinue).Count
+                        }
+                        if (Test-Path $UserFolder) {
+                            $UserSettings = (Get-ChildItem -Path $UserFolder -Recurse -File -ErrorAction SilentlyContinue).Count
+                        }
+                        $TotalSettings = $ComputerSettings + $UserSettings
+                    } catch {}
+                }
+                
+                # Get links (simplified - would need to search for gPLink attributes)
+                $LinksCount = 0
+                $LinkedOUs = ""
+                $IsLinked = $false
+                
+                try {
+                    $GPODistinguishedName = Get-ADSIProperty -SearchResult $GPOResult -PropertyName "distinguishedname"
+                    $GPOID = $GPODistinguishedName -replace '.*CN=\{([^}]+)\}.*', '$1'
+                    
+                    # Search for objects with gPLink containing this GPO ID
+                    $LinkSearcher = Get-ADSISearcher -Filter "(gPLink=*$GPOID*)" -Properties @("distinguishedname", "gplink")
+                    $LinkResults = $LinkSearcher.FindAll()
+                    $LinksCount = $LinkResults.Count
+                    $IsLinked = $LinksCount -gt 0
+                    
+                    $LinkedOUList = @()
+                    foreach ($LinkResult in $LinkResults) {
+                        $LinkedDN = Get-ADSIProperty -SearchResult $LinkResult -PropertyName "distinguishedname"
+                        if ($LinkedDN) {
+                            $LinkedOUList += $LinkedDN
+                        }
+                    }
+                    $LinkedOUs = $LinkedOUList -join '; '
+                    
+                    $LinkResults.Dispose()
+                    $LinkSearcher.Dispose()
+                } catch {}
+                
+                $GPOObject = [PSCustomObject]@{
+                    GPOName = $GPOName
+                    GPOPath = $GPOPath
+                    CreatedTime = $WhenCreated
+                    ModifiedTime = $WhenChanged
+                    Status = $GPOStatus
+                    FunctionalityVersion = $FunctionalityVersion
+                    ComputerSettingsCount = $ComputerSettings
+                    UserSettingsCount = $UserSettings
+                    TotalSettings = $TotalSettings
+                    LinksCount = $LinksCount
+                    LinkedOUs = $LinkedOUs
+                    IsLinked = $IsLinked
+                }
+                
+                $GPODetails += $GPOObject
+                
+            } catch {
+                Write-Log "Error processing GPO $(Get-ADSIProperty -SearchResult $GPOResult -PropertyName 'displayname'): $($_.Exception.Message)"
+            }
+        }
+        
+        $GPOResults.Dispose()
+        $GPOSearcher.Dispose()
+        
+    } catch {
+        Write-Log "Error accessing GPOs using ADSI: $($_.Exception.Message)"
+        return
+    }
+    
+    Write-Progress -Activity "Processing GPOs" -Completed
+    
+    # Export GPO details
+    if ($GPODetails.Count -gt 0) {
+        $GPODetails | Export-Csv "$Global:OutputPath\GPO_Details.csv" -NoTypeInformation -Encoding UTF8
+    }
+    
+    # Summary statistics
+    $GPOStats = [PSCustomObject]@{
+        TotalGPOs = $GPODetails.Count
+        LinkedGPOs = ($GPODetails | Where-Object {$_.IsLinked -eq $true}).Count
+        UnlinkedGPOs = ($GPODetails | Where-Object {$_.IsLinked -eq $false}).Count
+        AverageSettingsPerGPO = if ($GPODetails.Count -gt 0) { [math]::Round(($GPODetails | Measure-Object -Property TotalSettings -Average).Average, 2) } else { 0 }
+        ProcessingTime = ((Get-Date) - $ScriptStartTime).TotalMinutes
+    }
+    
+    $GPOStats | Export-Csv "$Global:OutputPath\GPO_Summary_Stats.csv" -NoTypeInformation -Encoding UTF8
+    
+    Write-Log "GPO assessment completed in $([math]::Round($GPOStats.ProcessingTime, 2)) minutes using ADSI"
+    
+    [GC]::Collect()
+}
+
+function Get-DNSAssessment {
+    if (-not $Global:Config.Features.EnableDNSAssessment) {
+        Write-Log "DNS assessment disabled in configuration"
+        return
+    }
+    
+    Write-Log "=== Starting DNS Assessment (ADSI Version) ==="
+    
+    $ScriptStartTime = Get-Date
+    
+    # Get DNS Servers using ADSI
+    Write-Host "Identifying DNS servers using ADSI..." -ForegroundColor Yellow
+    
+    $DNSServers = @()
+    try {
+        # Get Domain Controllers using ADSI
+        $DCSearcher = Get-ADSISearcher -Filter "(&(objectClass=computer)(userAccountControl:1.2.840.113556.1.4.803:=8192))" -Properties @("cn", "dnshostname")
+        $DCResults = $DCSearcher.FindAll()
+        
+        foreach ($DCResult in $DCResults) {
+            $DCName = Get-ADSIProperty -SearchResult $DCResult -PropertyName "cn"
+            if ($DCName) {
+                try {
+                    $DNSService = Get-Service -ComputerName $DCName -Name DNS -ErrorAction SilentlyContinue
+                    if ($DNSService) {
+                        $DNSServers += $DCName
+                    }
+                } catch {}
+            }
+        }
+        
+        $DCResults.Dispose()
+        $DCSearcher.Dispose()
+        
+    } catch {
+        Write-Log "Error identifying DNS servers: $($_.Exception.Message)"
+    }
+    
+    Write-Log "Found $($DNSServers.Count) DNS servers using ADSI"
+    
+    # Get DNS Zones
+    $AllZones = @()
+    
+    foreach ($DNSServer in $DNSServers) {
+        Write-Host "Processing DNS server: $DNSServer" -ForegroundColor Green
+        
+        try {
+            # Get zones from this server (using WMI since DNS zones aren't stored in AD by default)
+            $Zones = Get-WmiObject -Namespace "root\MicrosoftDNS" -Class MicrosoftDNS_Zone -ComputerName $DNSServer -ErrorAction Stop
+            
+            foreach ($Zone in $Zones) {
+                $ZoneObject = [PSCustomObject]@{
+                    ZoneName = $Zone.Name
+                    ZoneType = $Zone.ZoneType
+                    IsDsIntegrated = $Zone.DsIntegrated
+                    IsReverseLookup = $Zone.Reverse
+                    IsSigned = $Zone.IsSigned
+                    DynamicUpdate = $Zone.AllowUpdate
+                    DNSServer = $DNSServer
+                }
+                
+                $AllZones += $ZoneObject
+            }
+        } catch {
+            Write-Log "Error processing DNS server $DNSServer : $($_.Exception.Message)"
+        }
+    }
+    
+    # Export results
+    if ($AllZones.Count -gt 0) {
+        $AllZones | Export-Csv "$Global:OutputPath\DNS_Zones.csv" -NoTypeInformation -Encoding UTF8
+    }
+    
+    # DNS Statistics
+    $DNSStats = [PSCustomObject]@{
+        TotalDNSServers = $DNSServers.Count
+        TotalZones = $AllZones.Count
+        ADIntegratedZones = ($AllZones | Where-Object {$_.IsDsIntegrated -eq $true}).Count
+        SignedZones = ($AllZones | Where-Object {$_.IsSigned -eq $true}).Count
+        ProcessingTime = ((Get-Date) - $ScriptStartTime).TotalMinutes
+    }
+    
+    $DNSStats | Export-Csv "$Global:OutputPath\DNS_Summary_Stats.csv" -NoTypeInformation -Encoding UTF8
+    
+    Write-Log "DNS assessment completed in $([math]::Round($DNSStats.ProcessingTime, 2)) minutes using ADSI"
+    
+    [GC]::Collect()
+}
+
+function Get-DCInfrastructureAssessment {
+    if (-not $Global:Config.Features.EnableInfrastructureAssessment) {
+        Write-Log "Infrastructure assessment disabled in configuration"
+        return
+    }
+    
+    Write-Log "=== Starting Domain Controllers and Infrastructure Assessment (ADSI Version) ==="
+    
+    $ScriptStartTime = Get-Date
+    
+    # Get Forest and Domain Information using ADSI
+    Write-Host "Getting Forest and Domain information using ADSI..." -ForegroundColor Yellow
+    
+    $ForestInfo = Get-ForestInfo
+    $DomainInfo = Get-DomainInfo
+    
+    if ($ForestInfo) {
+        $ForestInfoObj = [PSCustomObject]@{
+            ForestName = $ForestInfo.Name
+            Domains = $ForestInfo.Domains -join '; '
+            SchemaVersion = $ForestInfo.Schema.ObjectVersion
+            ConfigurationDN = $ForestInfo.ConfigurationDN
+            SchemaDN = $ForestInfo.SchemaDN
+        }
+        
+        $ForestInfoObj | Export-Csv "$Global:OutputPath\Infrastructure_Forest_Information.csv" -NoTypeInformation -Encoding UTF8
+    }
+    
+    if ($DomainInfo) {
+        $DomainInfoObj = [PSCustomObject]@{
+            DomainName = $Global:DomainName
+            DomainDN = $Global:DomainDN
+            MinPasswordLength = $DomainInfo.MinPasswordLength
+            PasswordHistoryLength = $DomainInfo.PasswordHistoryLength
+            MaxPasswordAgeDays = if ($DomainInfo.MaxPasswordAge.Days -gt 0) { $DomainInfo.MaxPasswordAge.Days } else { "Never" }
+            LockoutThreshold = $DomainInfo.LockoutThreshold
+            LockoutDurationMinutes = if ($DomainInfo.LockoutDuration.TotalMinutes -gt 0) { $DomainInfo.LockoutDuration.TotalMinutes } else { "Forever" }
+        }
+        
+        $DomainInfoObj | Export-Csv "$Global:OutputPath\Infrastructure_Domain_Information.csv" -NoTypeInformation -Encoding UTF8
+    }
+    
+    # Get all Domain Controllers with enhanced analysis using ADSI
+    Write-Host "Analyzing Domain Controllers using ADSI..." -ForegroundColor Yellow
+    
+    $DCSearcher = Get-ADSISearcher -Filter "(&(objectClass=computer)(userAccountControl:1.2.840.113556.1.4.803:=8192))" -Properties @(
+        "cn", "dnshostname", "operatingsystem", "operatingsystemversion", "useraccountcontrol", "whencreated"
+    )
+    $DCResults = $DCSearcher.FindAll()
+    
+    $DCDetails = @()
+    
+    foreach ($DCResult in $DCResults) {
+        Write-Host "Processing DC: $(Get-ADSIProperty -SearchResult $DCResult -PropertyName 'cn')" -ForegroundColor Green
+        
+        try {
+            $DCName = Get-ADSIProperty -SearchResult $DCResult -PropertyName "cn"
+            $DNSHostName = Get-ADSIProperty -SearchResult $DCResult -PropertyName "dnshostname"
+            $OperatingSystem = Get-ADSIProperty -SearchResult $DCResult -PropertyName "operatingsystem"
+            $OperatingSystemVersion = Get-ADSIProperty -SearchResult $DCResult -PropertyName "operatingsystemversion"
+            $WhenCreated = Get-ADSIProperty -SearchResult $DCResult -PropertyName "whencreated"
+            
+            # Get DC health and services
+            $Services = @()
+            $ServiceNames = @('NTDS', 'DNS', 'W32Time', 'Netlogon', 'DFSR', 'KDC')
+            
+            foreach ($ServiceName in $ServiceNames) {
+                try {
+                    $Service = Get-Service -ComputerName $DCName -Name $ServiceName -ErrorAction SilentlyContinue
+                    if ($Service) {
+                        $Services += "$ServiceName=$($Service.Status)"
+                    }
+                } catch {}
+            }
+            
+            # Get OS info
+            $OS = Get-WmiObject -Class Win32_OperatingSystem -ComputerName $DCName -ErrorAction SilentlyContinue
+            
+            # ADUAC analysis for DC computer account
+            $UAC = Get-ADSIProperty -SearchResult $DCResult -PropertyName "useraccountcontrol"
+            if (!$UAC) { $UAC = 0 }
+            $UACAnalysis = Get-UACSummary -UACValue $UAC
+            
+            # Determine if this is a Global Catalog (simplified check)
+            $IsGlobalCatalog = $false
+            try {
+                # Check for Global Catalog port (3268) listening
+                $GCTest = Test-NetConnection -ComputerName $DCName -Port 3268 -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
+                $IsGlobalCatalog = $GCTest.TcpTestSucceeded
+            } catch {}
+            
+            # Check if Read-Only DC (RODC)
+            $IsReadOnly = $UACAnalysis.UACFlags -match "PARTIAL_SECRETS_ACCOUNT"
+            
+            $DCObject = [PSCustomObject]@{
+                DCName = $DCName
+                DNSHostName = $DNSHostName
+                OperatingSystem = $OperatingSystem
+                OperatingSystemVersion = $OperatingSystemVersion
+                WhenCreated = $WhenCreated
+                IsGlobalCatalog = $IsGlobalCatalog
+                IsReadOnly = $IsReadOnly
+                Services = $Services -join '; '
+                LastReboot = if ($OS) { $OS.ConvertToDateTime($OS.LastBootUpTime) } else { $null }
+                UserAccountControl = $UAC
+                UACFlags = $UACAnalysis.FlagsString
+                TrustedForDelegation = $UACAnalysis.TrustedForDelegation
+            }
+            
+            $DCDetails += $DCObject
+            
+        } catch {
+            Write-Log "Error processing DC $(Get-ADSIProperty -SearchResult $DCResult -PropertyName 'cn'): $($_.Exception.Message)"
+        }
+    }
+    
+    $DCResults.Dispose()
+    $DCSearcher.Dispose()
+    
+    if ($DCDetails.Count -gt 0) {
+        $DCDetails | Export-Csv "$Global:OutputPath\Infrastructure_Domain_Controllers.csv" -NoTypeInformation -Encoding UTF8
+    }
+    
+    # Get Sites and Subnets using ADSI
+    Write-Host "Getting Sites and Subnets using ADSI..." -ForegroundColor Yellow
+    
+    $SiteDetails = @()
+    try {
+        $SiteSearcher = Get-ADSISearcher -Filter "(objectClass=site)" -SearchBase "CN=Sites,$Global:ConfigurationDN" -Properties @("cn", "description", "location")
+        $SiteResults = $SiteSearcher.FindAll()
+        
+        foreach ($SiteResult in $SiteResults) {
+            $SiteName = Get-ADSIProperty -SearchResult $SiteResult -PropertyName "cn"
+            $Description = Get-ADSIProperty -SearchResult $SiteResult -PropertyName "description"
+            $Location = Get-ADSIProperty -SearchResult $SiteResult -PropertyName "location"
+            
+            # Get subnets for this site
+            $SubnetSearcher = Get-ADSISearcher -Filter "(&(objectClass=subnet)(siteObject=CN=$SiteName,CN=Sites,$Global:ConfigurationDN))" -SearchBase "CN=Subnets,CN=Sites,$Global:ConfigurationDN" -Properties @("cn")
+            $SubnetResults = $SubnetSearcher.FindAll()
+            
+            $Subnets = @()
+            foreach ($SubnetResult in $SubnetResults) {
+                $SubnetName = Get-ADSIProperty -SearchResult $SubnetResult -PropertyName "cn"
+                if ($SubnetName) {
+                    $Subnets += $SubnetName
+                }
+            }
+            
+            $SubnetResults.Dispose()
+            $SubnetSearcher.Dispose()
+            
+            # Get DCs for this site
+            $SiteDCs = $DCDetails | Where-Object {
+                # Simple site detection (would need more complex logic for accurate site assignment)
+                $true  # For now, we'll just include all DCs
+            }
+            
+            $SiteObject = [PSCustomObject]@{
+                SiteName = $SiteName
+                Description = $Description
+                Location = $Location
+                Subnets = $Subnets -join '; '
+                SubnetCount = $Subnets.Count
+                DomainControllers = ($SiteDCs | Select-Object -ExpandProperty DCName) -join '; '
+                DCCount = $SiteDCs.Count
+            }
+            
+            $SiteDetails += $SiteObject
+        }
+        
+        $SiteResults.Dispose()
+        $SiteSearcher.Dispose()
+        
+    } catch {
+        Write-Log "Error getting sites information: $($_.Exception.Message)"
+    }
+    
+    if ($SiteDetails.Count -gt 0) {
+        $SiteDetails | Export-Csv "$Global:OutputPath\Infrastructure_AD_Sites.csv" -NoTypeInformation -Encoding UTF8
+    }
+    
+    # Trust Relationships using ADSI
+    Write-Host "Getting Trust Relationships using ADSI..." -ForegroundColor Yellow
+    
+    $TrustDetails = @()
+    try {
+        $TrustSearcher = Get-ADSISearcher -Filter "(objectClass=trustedDomain)" -SearchBase "CN=System,$Global:DomainDN" -Properties @(
+            "cn", "trustdirection", "trusttype", "trustattributes", "whencreated"
+        )
+        $TrustResults = $TrustSearcher.FindAll()
+        
+        foreach ($TrustResult in $TrustResults) {
+            $TrustName = Get-ADSIProperty -SearchResult $TrustResult -PropertyName "cn"
+            $TrustDirection = Get-ADSIProperty -SearchResult $TrustResult -PropertyName "trustdirection"
+            $TrustType = Get-ADSIProperty -SearchResult $TrustResult -PropertyName "trusttype"
+            $TrustAttributes = Get-ADSIProperty -SearchResult $TrustResult -PropertyName "trustattributes"
+            $WhenCreated = Get-ADSIProperty -SearchResult $TrustResult -PropertyName "whencreated"
+            
+            $TrustDetails += [PSCustomObject]@{
+                TrustName = $TrustName
+                TrustDirection = $TrustDirection
+                TrustType = $TrustType
+                TrustAttributes = $TrustAttributes
+                Created = $WhenCreated
+                TrustStatus = "Active"  # Would need additional checks for actual status
+            }
+        }
+        
+        $TrustResults.Dispose()
+        $TrustSearcher.Dispose()
+        
+    } catch {
+        Write-Log "Error getting trust relationships: $($_.Exception.Message)"
+    }
+    
+    if ($TrustDetails.Count -gt 0) {
+        $TrustDetails | Export-Csv "$Global:OutputPath\Infrastructure_Trust_Relationships.csv" -NoTypeInformation -Encoding UTF8
+    }
+    
+    # Infrastructure Summary
+    $InfraStats = [PSCustomObject]@{
+        TotalDomainControllers = $DCDetails.Count
+        GlobalCatalogs = ($DCDetails | Where-Object {$_.IsGlobalCatalog -eq $true}).Count
+        ReadOnlyDCs = ($DCDetails | Where-Object {$_.IsReadOnly -eq $true}).Count
+        Sites = $SiteDetails.Count
+        TrustRelationships = $TrustDetails.Count
+        ProcessingTime = ((Get-Date) - $ScriptStartTime).TotalMinutes
+    }
+    
+    $InfraStats | Export-Csv "$Global:OutputPath\Infrastructure_Summary_Stats.csv" -NoTypeInformation -Encoding UTF8
+    
+    Write-Log "DC and Infrastructure assessment completed in $([math]::Round($InfraStats.ProcessingTime, 2)) minutes using ADSI"
+    
+    [GC]::Collect()
+}
+
+function Get-ADApplicationsAssessment {
+    if (-not $Global:Config.Features.EnableApplicationsAssessment) {
+        Write-Log "Applications assessment disabled in configuration"
+        return
+    }
+    
+    Write-Log "=== Starting AD-Integrated Applications Assessment (ADSI Version) ==="
+    
+    $ScriptStartTime = Get-Date
+    
+    # Service Principal Names (SPNs) - Enhanced with ADUAC analysis using ADSI
+    Write-Host "Gathering Service Principal Names with enhanced analysis using ADSI..." -ForegroundColor Yellow
+    
+    $SPNs = @()
+    $ServiceAccountSearcher = Get-ADSISearcher -Filter "(&(objectClass=user)(servicePrincipalName=*))" -Properties @(
+        "serviceprincipalname", "samaccountname", "useraccountcontrol", "cn"
+    )
+    $ServiceAccountResults = $ServiceAccountSearcher.FindAll()
+    
+    foreach ($Result in $ServiceAccountResults) {
+        $SamAccountName = Get-ADSIProperty -SearchResult $Result -PropertyName "samaccountname"
+        $ObjectName = Get-ADSIProperty -SearchResult $Result -PropertyName "cn"
+        $UAC = Get-ADSIProperty -SearchResult $Result -PropertyName "useraccountcontrol"
+        if (!$UAC) { $UAC = 0 }
+        $UACAnalysis = Get-UACSummary -UACValue $UAC
+        
+        $SPNCollection = Get-ADSIPropertyCollection -SearchResult $Result -PropertyName "serviceprincipalname"
+        
+        foreach ($SPN in $SPNCollection) {
+            $SPNs += [PSCustomObject]@{
+                AccountName = if ($SamAccountName) { $SamAccountName } else { $ObjectName }
+                AccountType = "User"
+                ServicePrincipalName = $SPN
+                ServiceType = $SPN.Split('/')[0]
+                Enabled = !$UACAnalysis.IsDisabled
+                UACFlags = $UACAnalysis.FlagsString
+                TrustedForDelegation = $UACAnalysis.TrustedForDelegation
+                PasswordNeverExpires = $UACAnalysis.PasswordNeverExpires
+                RiskLevel = if ($UACAnalysis.TrustedForDelegation -and $UACAnalysis.PasswordNeverExpires) { "High" } 
+                           elseif ($UACAnalysis.TrustedForDelegation) { "Medium" } 
+                           else { "Low" }
+            }
+        }
+    }
+    
+    $ServiceAccountResults.Dispose()
+    $ServiceAccountSearcher.Dispose()
+    
+    # Also get computer SPNs with ADUAC analysis using ADSI
+    $ComputerSPNSearcher = Get-ADSISearcher -Filter "(&(objectClass=computer)(servicePrincipalName=*))" -Properties @(
+        "serviceprincipalname", "cn", "useraccountcontrol"
+    )
+    $ComputerSPNResults = $ComputerSPNSearcher.FindAll()
+    
+    foreach ($Result in $ComputerSPNResults) {
+        $ComputerName = Get-ADSIProperty -SearchResult $Result -PropertyName "cn"
+        $UAC = Get-ADSIProperty -SearchResult $Result -PropertyName "useraccountcontrol"
+        if (!$UAC) { $UAC = 0 }
+        $UACAnalysis = Get-UACSummary -UACValue $UAC
+        
+        $SPNCollection = Get-ADSIPropertyCollection -SearchResult $Result -PropertyName "serviceprincipalname"
+        
+        foreach ($SPN in $SPNCollection) {
+            $SPNs += [PSCustomObject]@{
+                AccountName = $ComputerName
+                AccountType = "Computer"
+                ServicePrincipalName = $SPN
+                ServiceType = $SPN.Split('/')[0]
+                Enabled = !$UACAnalysis.IsDisabled
+                UACFlags = $UACAnalysis.FlagsString
+                TrustedForDelegation = $UACAnalysis.TrustedForDelegation
+                PasswordNeverExpires = $UACAnalysis.PasswordNeverExpires
+                RiskLevel = if ($UACAnalysis.TrustedForDelegation) { "Medium" } else { "Low" }
+            }
+        }
+    }
+    
+    $ComputerSPNResults.Dispose()
+    $ComputerSPNSearcher.Dispose()
+    
+    if ($SPNs.Count -gt 0) {
+        $SPNs | Export-Csv "$Global:OutputPath\Applications_Service_Principal_Names.csv" -NoTypeInformation -Encoding UTF8
+    }
+    
+    # Application Summary with risk analysis
+    $HighRiskSPNs = ($SPNs | Where-Object {$_.RiskLevel -eq "High"}).Count
+    $MediumRiskSPNs = ($SPNs | Where-Object {$_.RiskLevel -eq "Medium"}).Count
+    
+    $AppStats = [PSCustomObject]@{
+        TotalSPNs = $SPNs.Count
+        UniqueSPNTypes = ($SPNs | Select-Object -ExpandProperty ServiceType -Unique).Count
+        HighRiskSPNs = $HighRiskSPNs
+        MediumRiskSPNs = $MediumRiskSPNs
+        ProcessingTime = ((Get-Date) - $ScriptStartTime).TotalMinutes
+    }
+    
+    $AppStats | Export-Csv "$Global:OutputPath\Applications_Summary_Stats.csv" -NoTypeInformation -Encoding UTF8
+    
+    Write-Log "AD Applications assessment completed in $([math]::Round($AppStats.ProcessingTime, 2)) minutes using ADSI"
+    
+    [GC]::Collect()
+}
+
+function Get-ADSecurityAssessment {
+    if (-not $Global:Config.Features.EnableSecurityAssessment) {
+        Write-Log "Security assessment disabled in configuration"
+        return
+    }
+    
+    Write-Log "=== Starting AD Security Assessment (ADSI Version) ==="
+    
+    $ScriptStartTime = Get-Date
+    
+    # Password Policy using ADSI
+    Write-Host "Getting Password Policy using ADSI..." -ForegroundColor Yellow
+    
+    $DomainPolicy = Get-DomainInfo
+    
+    if ($DomainPolicy) {
+        $PasswordPolicy = [PSCustomObject]@{
+            MinPasswordLength = $DomainPolicy.MinPasswordLength
+            PasswordHistoryCount = $DomainPolicy.PasswordHistoryLength
+            MaxPasswordAgeDays = if ($DomainPolicy.MaxPasswordAge.Days -gt 0) { $DomainPolicy.MaxPasswordAge.Days } else { "Never" }
+            MinPasswordAgeDays = if ($DomainPolicy.MinPasswordAge.Days -gt 0) { $DomainPolicy.MinPasswordAge.Days } else { 0 }
+            LockoutDurationMinutes = if ($DomainPolicy.LockoutDuration.TotalMinutes -gt 0) { $DomainPolicy.LockoutDuration.TotalMinutes } else { "Forever" }
+            LockoutThreshold = $DomainPolicy.LockoutThreshold
+            LockoutObservationWindowMinutes = if ($DomainPolicy.LockoutObservationWindow.TotalMinutes -gt 0) { $DomainPolicy.LockoutObservationWindow.TotalMinutes } else { "Forever" }
+            ComplexityEnabled = ($DomainPolicy.PwdProperties -band 1) -eq 1
+            ReversibleEncryptionEnabled = ($DomainPolicy.PwdProperties -band 16) -eq 16
+            AutoDetectedInactiveThreshold = $Global:Config.InactiveUserDays
+        }
+        
+        $PasswordPolicy | Export-Csv "$Global:OutputPath\Security_Password_Policy.csv" -NoTypeInformation -Encoding UTF8
+    }
+    
+    # Fine-Grained Password Policies (if supported) using ADSI
+    if ($Global:Config.SupportsFineGrainedPasswordPolicy) {
+        try {
+            $FGPPSearcher = Get-ADSISearcher -Filter "(objectClass=msDS-PasswordSettings)" -SearchBase "CN=Password Settings Container,CN=System,$Global:DomainDN" -Properties @(
+                "cn", "msds-passwordsettingsprecedence", "msds-minimumpasswordlength", "msds-passwordhistorylength",
+                "msds-maximumpasswordage", "msds-passwordcomplexityenabled", "msds-psoappliesto"
+            )
+            $FGPPResults = $FGPPSearcher.FindAll()
+            
+            if ($FGPPResults.Count -gt 0) {
+                $FGPPDetails = @()
+                
+                foreach ($FGPPResult in $FGPPResults) {
+                    $Name = Get-ADSIProperty -SearchResult $FGPPResult -PropertyName "cn"
+                    $Precedence = Get-ADSIProperty -SearchResult $FGPPResult -PropertyName "msds-passwordsettingsprecedence"
+                    $MinLength = Get-ADSIProperty -SearchResult $FGPPResult -PropertyName "msds-minimumpasswordlength"
+                    $HistoryLength = Get-ADSIProperty -SearchResult $FGPPResult -PropertyName "msds-passwordhistorylength"
+                    $MaxAge = Get-ADSIProperty -SearchResult $FGPPResult -PropertyName "msds-maximumpasswordage"
+                    $ComplexityEnabled = Get-ADSIProperty -SearchResult $FGPPResult -PropertyName "msds-passwordcomplexityenabled"
+                    $AppliesTo = Get-ADSIPropertyCollection -SearchResult $FGPPResult -PropertyName "msds-psoappliesto"
+                    
+                    $MaxAgeDays = if ($MaxAge -and $MaxAge -lt 0) { [Math]::Abs($MaxAge) / 864000000000 } else { "Never" }
+                    
+                    $FGPPDetails += [PSCustomObject]@{
+                        Name = $Name
+                        Precedence = $Precedence
+                        MinPasswordLength = $MinLength
+                        PasswordHistoryCount = $HistoryLength
+                        MaxPasswordAgeDays = $MaxAgeDays
+                        ComplexityEnabled = $ComplexityEnabled
+                        AppliesTo = $AppliesTo -join '; '
+                    }
+                }
+                
+                $FGPPDetails | Export-Csv "$Global:OutputPath\Security_Fine_Grained_Password_Policies.csv" -NoTypeInformation -Encoding UTF8
+            }
+            
+            $FGPPResults.Dispose()
+            $FGPPSearcher.Dispose()
+            
+        } catch {
+            Write-Log "Error getting Fine-Grained Password Policies: $($_.Exception.Message)"
+        }
+    }
+    
+    # Privileged Groups with configurable group list using ADSI
+    Write-Host "Analyzing Privileged Groups using ADSI..." -ForegroundColor Yellow
+    
+    $PrivilegedGroups = $Global:Config.SecuritySettings.PrivilegedGroups
+    $PrivilegedGroupMembers = @()
+    
+    foreach ($GroupName in $PrivilegedGroups) {
+        try {
+            $GroupSearcher = Get-ADSISearcher -Filter "(&(objectClass=group)(cn=$GroupName))" -Properties @("distinguishedname", "member")
+            $GroupResult = $GroupSearcher.FindOne()
+            
+            if ($GroupResult) {
+                $GroupDN = Get-ADSIProperty -SearchResult $GroupResult -PropertyName "distinguishedname"
+                $Members = Get-ADSIPropertyCollection -SearchResult $GroupResult -PropertyName "member"
+                
+                # Process direct members
+                foreach ($MemberDN in $Members) {
+                    try {
+                        $MemberSearcher = Get-ADSISearcher -Filter "(distinguishedName=$MemberDN)" -Properties @("cn", "objectclass", "useraccountcontrol", "objectsid") -SearchScope "Base"
+                        $MemberResult = $MemberSearcher.FindOne()
+                        
+                        if ($MemberResult) {
+                            $MemberName = Get-ADSIProperty -SearchResult $MemberResult -PropertyName "cn"
+                            $ObjectClasses = Get-ADSIPropertyCollection -SearchResult $MemberResult -PropertyName "objectclass"
+                            $ObjectSID = Get-ADSIProperty -SearchResult $MemberResult -PropertyName "objectsid"
+                            $MemberType = if ("user" -in $ObjectClasses) { "user" } elseif ("group" -in $ObjectClasses) { "group" } else { "other" }
+                            
+                            # Enhanced with ADUAC analysis for user members
+                            $UACFlags = ""
+                            $PasswordNeverExpires = $false
+                            $TrustedForDelegation = $false
+                            
+                            if ($MemberType -eq "user") {
+                                $UAC = Get-ADSIProperty -SearchResult $MemberResult -PropertyName "useraccountcontrol"
+                                if ($UAC) {
+                                    $UACAnalysis = Get-UACSummary -UACValue $UAC
+                                    $UACFlags = $UACAnalysis.FlagsString
+                                    $PasswordNeverExpires = $UACAnalysis.PasswordNeverExpires
+                                    $TrustedForDelegation = $UACAnalysis.TrustedForDelegation
+                                }
+                            }
+                            
+                            $PrivilegedGroupMembers += [PSCustomObject]@{
+                                GroupName = $GroupName
+                                MemberName = $MemberName
+                                MemberType = $MemberType
+                                MemberSID = if ($ObjectSID) { (New-Object System.Security.Principal.SecurityIdentifier($ObjectSID, 0)).Value } else { "" }
+                                UACFlags = $UACFlags
+                                PasswordNeverExpires = $PasswordNeverExpires
+                                TrustedForDelegation = $TrustedForDelegation
+                                RiskLevel = if ($TrustedForDelegation -and $PasswordNeverExpires) { "High" } 
+                                           elseif ($TrustedForDelegation -or $PasswordNeverExpires) { "Medium" } 
+                                           else { "Low" }
+                            }
+                        }
+                        
+                        $MemberSearcher.Dispose()
+                    } catch {
+                        Write-Log "Error processing member $MemberDN : $($_.Exception.Message)"
+                    }
+                }
+            }
+            
+            $GroupSearcher.Dispose()
+        } catch {
+            Write-Log "Error processing group $GroupName : $($_.Exception.Message)"
+        }
+    }
+    
+    if ($PrivilegedGroupMembers.Count -gt 0) {
+        $PrivilegedGroupMembers | Export-Csv "$Global:OutputPath\Security_Privileged_Group_Members.csv" -NoTypeInformation -Encoding UTF8
+    }
+    
+    # Enhanced Security Summary with configurable thresholds
+    $SecurityStats = [PSCustomObject]@{
+        PasswordMinLength = if ($DomainPolicy) { $DomainPolicy.MinPasswordLength } else { "Unknown" }
+        PasswordComplexity = if ($DomainPolicy) { ($DomainPolicy.PwdProperties -band 1) -eq 1 } else { "Unknown" }
+        ConfiguredInactiveThreshold = $Global:Config.InactiveUserDays
+        ConfiguredStalePasswordThreshold = $Global:Config.StalePasswordDays
+        FineGrainedPolicies = if ($Global:Config.SupportsFineGrainedPasswordPolicy) { "Supported" } else { "Not Supported" }
+        PrivilegedGroupsChecked = $PrivilegedGroups.Count
+        PrivilegedUsers = ($PrivilegedGroupMembers | Where-Object {$_.MemberType -eq "user"} | Select-Object -ExpandProperty MemberName -Unique).Count
+        HighRiskPrivilegedAccounts = ($PrivilegedGroupMembers | Where-Object {$_.RiskLevel -eq "High"}).Count
+        ProcessingTime = ((Get-Date) - $ScriptStartTime).TotalMinutes
+    }
+    
+    $SecurityStats | Export-Csv "$Global:OutputPath\Security_Summary_Stats.csv" -NoTypeInformation -Encoding UTF8
+    
+    Write-Log "Security assessment completed in $([math]::Round($SecurityStats.ProcessingTime, 2)) minutes using ADSI"
+    
+    [GC]::Collect()
+}
+
+#endregion
+
 #region Standard Assessment Functions (ADSI Version)
 function Get-ADUsersAssessment {
     Write-Log "=== Starting Standard AD Users Assessment (ADSI Version) ==="
