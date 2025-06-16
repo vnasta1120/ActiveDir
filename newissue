@@ -1,0 +1,43 @@
+At C:\Users\aa-vnasta-som\Desktop\Enhanced-AD-Assessment.ps1:249 char:42
++             DomainMode = if ($Domain.msDS-Behavior-Version) { $Domain ...
++                                          ~~~~~~~~~
+Unexpected token '-Behavior' in expression or statement.
+At C:\Users\aa-vnasta-som\Desktop\Enhanced-AD-Assessment.ps1:249 char:51
++             DomainMode = if ($Domain.msDS-Behavior-Version) { $Domain ...
++                                                   ~~~~~~~~
+Unexpected token '-Version' in expression or statement.
+At C:\Users\aa-vnasta-som\Desktop\Enhanced-AD-Assessment.ps1:249 char:51
++             DomainMode = if ($Domain.msDS-Behavior-Version) { $Domain ...
++                                                   ~~~~~~~~
+Missing closing ')' after expression in 'if' statement.
+At C:\Users\aa-vnasta-som\Desktop\Enhanced-AD-Assessment.ps1:249 char:50
++             DomainMode = if ($Domain.msDS-Behavior-Version) { $Domain ...
++                                                  ~
+The hash literal was incomplete.
+At C:\Users\aa-vnasta-som\Desktop\Enhanced-AD-Assessment.ps1:231 char:9
++     try {
++         ~
+Missing closing '}' in statement block or type definition.
+At C:\Users\aa-vnasta-som\Desktop\Enhanced-AD-Assessment.ps1:249 char:59
++             DomainMode = if ($Domain.msDS-Behavior-Version) { $Domain ...
++                                                           ~
+The Try statement is missing its Catch or Finally block.
+At C:\Users\aa-vnasta-som\Desktop\Enhanced-AD-Assessment.ps1:230 char:29
++ function Get-ADSIDomainInfo {
++                             ~
+Missing closing '}' in statement block or type definition.
+At C:\Users\aa-vnasta-som\Desktop\Enhanced-AD-Assessment.ps1:249 char:59
++             DomainMode = if ($Domain.msDS-Behavior-Version) { $Domain ...
++                                                           ~
+Unexpected token ')' in expression or statement.
+At C:\Users\aa-vnasta-som\Desktop\Enhanced-AD-Assessment.ps1:249 char:100
++ ... S-Behavior-Version) { $Domain.'msDS-Behavior-Version'[0] } else { 0 }
++                                                                ~~~~
+Unexpected token 'else' in expression or statement.
+At C:\Users\aa-vnasta-som\Desktop\Enhanced-AD-Assessment.ps1:251 char:9
++         }
++         ~
+Unexpected token '}' in expression or statement.
+Not all parse errors were reported.  Correct the reported errors and try again.
+    + CategoryInfo          : ParserError: (:) [], ParseException
+    + FullyQualifiedErrorId : UnexpectedToken
