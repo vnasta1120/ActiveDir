@@ -1,62 +1,26 @@
 PS C:\Scripts> .\AD-Users-Enhanced-Assessment.ps1
-WARNING: Failed to load core script: At C:\Scripts\00-AD-Assessment-Core.ps1:76 char:38
-+             DomainMode = $Domain.msDS-Behavior-Version[0]
-+                                      ~~~~~~~~~
-Unexpected token '-Behavior' in expression or statement.
+Write-Log : The term 'Write-Log' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling
+of the name, or if a path was included, verify that the path is correct and try again.
+At C:\Scripts\AD-Users-Enhanced-Assessment.ps1:277 char:5
++     Write-Log "=== Starting Enhanced AD Users Assessment with ADUAC E ...
++     ~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (Write-Log:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
 
-At C:\Scripts\00-AD-Assessment-Core.ps1:76 char:47
-+             DomainMode = $Domain.msDS-Behavior-Version[0]
-+                                               ~~~~~~~~
-Unexpected token '-Version' in expression or statement.
+Get-ADSIDomainInfo : The term 'Get-ADSIDomainInfo' is not recognized as the name of a cmdlet, function, script file, or operable program.
+Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+At C:\Scripts\AD-Users-Enhanced-Assessment.ps1:284 char:19
++     $DomainInfo = Get-ADSIDomainInfo
++                   ~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (Get-ADSIDomainInfo:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
 
-At C:\Scripts\00-AD-Assessment-Core.ps1:76 char:47
-+             DomainMode = $Domain.msDS-Behavior-Version[0]
-+                                               ~
-The hash literal was incomplete.
+Get-ADUsersAssessmentEnhanced : Failed to get domain information
+At C:\Scripts\AD-Users-Enhanced-Assessment.ps1:747 char:5
++     Get-ADUsersAssessmentEnhanced
++     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:) [Write-Error], WriteErrorException
+    + FullyQualifiedErrorId : Microsoft.PowerShell.Commands.WriteErrorException,Get-ADUsersAssessmentEnhanced
 
-At C:\Scripts\00-AD-Assessment-Core.ps1:76 char:55
-+             DomainMode = $Domain.msDS-Behavior-Version[0]
-+                                                       ~~~
-Unexpected token '[0]' in expression or statement.
-
-At C:\Scripts\00-AD-Assessment-Core.ps1:76 char:56
-+             DomainMode = $Domain.msDS-Behavior-Version[0]
-+                                                        ~
-Missing type name after '['.
-
-At C:\Scripts\00-AD-Assessment-Core.ps1:78 char:10
-+         }
-+          ~
-The Try statement is missing its Catch or Finally block.
-
-At C:\Scripts\00-AD-Assessment-Core.ps1:84 char:1
-+ }
-+ ~
-Unexpected token '}' in expression or statement.
-
-At C:\Scripts\00-AD-Assessment-Core.ps1:576 char:76
-+ ... e ready. Run individual assessment scripts..." -ForegroundColor Green
-+                                                  ~~~~~~~~~~~~~~~~~~~~~~~~
-The string is missing the terminator: ".
-
-At C:\Scripts\00-AD-Assessment-Core.ps1:563 char:22
-+     if ($DomainTest) {
-+                      ~
-Missing closing '}' in statement block or type definition.
-
-At C:\Scripts\00-AD-Assessment-Core.ps1:561 char:5
-+ try {
-+     ~
-Missing closing '}' in statement block or type definition.
-
-Not all parse errors were reported.  Correct the reported errors and try again.
-Using embedded core functions...
-Using embedded configuration with defaults
-2025-06-18 10:31:43 - === Starting Enhanced AD Users Assessment with ADUAC Enumeration (ADSI) ===
-Getting total user count via ADSI...
-2025-06-18 10:32:52 - Total AD Users found: 12091
-Processing 12091 users with enhanced ADUAC analysis via ADSI...
-2025-06-18 10:33:39 - Enhanced user processing completed. Generating advanced reports...
-2025-06-18 10:33:42 - Enhanced user assessment completed in 1.98 minutes
 Enhanced Users Assessment completed. Results in: C:\AD_Assessment
 PS C:\Scripts>
