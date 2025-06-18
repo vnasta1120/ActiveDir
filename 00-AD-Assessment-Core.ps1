@@ -67,13 +67,23 @@ function Get-ADSIDomainInfo {
         
         $Domain = [ADSI]"LDAP://$DomainDN"
         
+        # Get domain mode - property with hyphen needs quotes
+        $DomainMode = $null
+        try {
+            $DomainMode = $Domain.'msDS-Behavior-Version'[0]
+        }
+        catch {
+            # If property doesn't exist, default to 0
+            $DomainMode = 0
+        }
+        
         return @{
             DomainDN = $DomainDN
             ConfigDN = $ConfigDN
             SchemaDN = $SchemaDN
             DomainName = $Domain.name[0]
-            NetBIOSName = $Domain.nETBIOSName[0]
-            DomainMode = $Domain.msDS-Behavior-Version[0]
+            NetBIOSName = if ($Domain.nETBIOSName) { $Domain.nETBIOSName[0] } else { "" }
+            DomainMode = $DomainMode
             DistinguishedName = $DomainDN
         }
     }
@@ -196,7 +206,12 @@ function ConvertTo-DateTime {
                 return [DateTime]::FromFileTime($Value)
             }
             "GeneralizedTime" {
-                return [DateTime]::ParseExact($Value, "yyyyMMddHHmmss.0Z", $null)
+                # Handle YYYYMMDDHHMMSS.0Z format
+                $dateString = $Value.ToString()
+                if ($dateString -match '(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})') {
+                    return [DateTime]::ParseExact($Matches[0], "yyyyMMddHHmmss", $null)
+                }
+                return $null
             }
             "UTCTime" {
                 return [DateTime]::ParseExact($Value, "yyMMddHHmmssZ", $null)
@@ -511,7 +526,7 @@ function Get-ETA {
 function Write-Log {
     param($Message)
     $LogMessage = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - $Message"
-    $LogMessage | Out-File -FilePath $LogFile -Append
+    $LogMessage | Out-File -FilePath $Global:LogFile -Append
     Write-Host $LogMessage
 }
 #endregion
