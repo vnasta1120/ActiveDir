@@ -1,91 +1,37 @@
-# Enhanced Active Directory Assessment - Core Infrastructure
-# Version 5.0 - Complete Universal Edition with ADSI Implementation
-# No Active Directory Module or WinRM Dependencies
-# Core configuration and utility functions for all assessment scripts
+# Enhanced AD Users Assessment with ADUAC Implementation
+# Version 5.0 - ADSI Implementation (No AD Module Required)
+# Self-contained version - No dependencies
 
 #Requires -Version 5.1
 
 param(
     [Parameter(Mandatory = $false)]
-    [ValidateScript({Test-Path $_ -PathType Leaf})]
-    [string]$ConfigFile,
-    
-    [Parameter(Mandatory = $false)]
-    [ValidateScript({Test-Path $_ -IsValid})]
     [string]$OutputPath = "C:\AD_Assessment",
     
     [Parameter(Mandatory = $false)]
-    [ValidateRange(1, 365)]
-    [int]$InactiveUserDays,
-    
-    [Parameter(Mandatory = $false)]
-    [ValidateRange(1, 365)]
-    [int]$InactiveComputerDays,
-    
-    [Parameter(Mandatory = $false)]
-    [bool]$UseAutoDetection = $true
+    [string]$ConfigFile
 )
 
-#region ADUAC Enumeration - Complete UserAccountControl Flags
-[Flags()]
-enum ADUAC {
-    SCRIPT                          = 0x0001      # 1 - Logon script executed
-    ACCOUNTDISABLE                  = 0x0002      # 2 - Account disabled
-    HOMEDIR_REQUIRED                = 0x0008      # 8 - Home directory required
-    LOCKOUT                         = 0x0010      # 16 - Account locked out
-    PASSWD_NOTREQD                  = 0x0020      # 32 - Password not required
-    PASSWD_CANT_CHANGE              = 0x0040      # 64 - User cannot change password
-    ENCRYPTED_TEXT_PWD_ALLOWED      = 0x0080      # 128 - Encrypted text password allowed
-    TEMP_DUPLICATE_ACCOUNT          = 0x0100      # 256 - Temporary duplicate account
-    NORMAL_ACCOUNT                  = 0x0200      # 512 - Normal user account
-    INTERDOMAIN_TRUST_ACCOUNT       = 0x0800      # 2048 - Interdomain trust account
-    WORKSTATION_TRUST_ACCOUNT       = 0x1000      # 4096 - Workstation trust account
-    SERVER_TRUST_ACCOUNT            = 0x2000      # 8192 - Server trust account
-    DONT_EXPIRE_PASSWORD            = 0x10000     # 65536 - Password never expires
-    MNS_LOGON_ACCOUNT              = 0x20000     # 131072 - MNS logon account
-    SMARTCARD_REQUIRED             = 0x40000     # 262144 - Smart card required
-    TRUSTED_FOR_DELEGATION         = 0x80000     # 524288 - Trusted for delegation
-    NOT_DELEGATED                  = 0x100000    # 1048576 - Not delegated
-    USE_DES_KEY_ONLY               = 0x200000    # 2097152 - Use DES key only
-    DONT_REQ_PREAUTH               = 0x400000    # 4194304 - Don't require preauth
-    PASSWORD_EXPIRED               = 0x800000    # 8388608 - Password expired
-    TRUSTED_TO_AUTH_FOR_DELEGATION = 0x1000000   # 16777216 - Trusted to auth for delegation
-}
-#endregion
+# DEFINE ALL FUNCTIONS AT SCRIPT LEVEL - NO CONDITIONAL BLOCKS!
 
-#region ADSI Helper Functions
+function Write-Log {
+    param($Message)
+    $LogMessage = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - $Message"
+    if ($Global:LogFile) {
+        $LogMessage | Out-File -FilePath $Global:LogFile -Append -ErrorAction SilentlyContinue
+    }
+    Write-Host $LogMessage
+}
+
 function Get-ADSIDomainInfo {
-    <#
-    .SYNOPSIS
-    Gets domain information using ADSI
-    #>
     try {
         $RootDSE = [ADSI]"LDAP://RootDSE"
         $DomainDN = $RootDSE.defaultNamingContext[0]
-        $ConfigDN = $RootDSE.configurationNamingContext[0]
-        $SchemaDN = $RootDSE.schemaNamingContext[0]
-        
         $Domain = [ADSI]"LDAP://$DomainDN"
-        
-        # Get domain mode - property with hyphen needs quotes
-        $DomainMode = $null
-        try {
-            if ($Domain.PSObject.Properties['msDS-Behavior-Version']) {
-                $DomainMode = $Domain.'msDS-Behavior-Version'[0]
-            }
-        }
-        catch {
-            # If property doesn't exist, default to 0
-            $DomainMode = 0
-        }
         
         return @{
             DomainDN = $DomainDN
-            ConfigDN = $ConfigDN
-            SchemaDN = $SchemaDN
             DomainName = $Domain.name[0]
-            NetBIOSName = if ($Domain.nETBIOSName) { $Domain.nETBIOSName[0] } else { "" }
-            DomainMode = $DomainMode
             DistinguishedName = $DomainDN
         }
     }
@@ -95,101 +41,7 @@ function Get-ADSIDomainInfo {
     }
 }
 
-function Get-ADSIPasswordPolicy {
-    <#
-    .SYNOPSIS
-    Gets password policy using ADSI
-    #>
-    try {
-        $DomainInfo = Get-ADSIDomainInfo
-        if (!$DomainInfo) { return $null }
-        
-        $Domain = [ADSI]"LDAP://$($DomainInfo.DomainDN)"
-        
-        # Convert file time to days
-        $MaxPwdAge = [System.Math]::Abs($Domain.maxPwdAge[0])
-        $MaxPwdAgeDays = if ($MaxPwdAge -eq 0) { 0 } else { $MaxPwdAge / 864000000000 }
-        
-        $MinPwdAge = [System.Math]::Abs($Domain.minPwdAge[0])
-        $MinPwdAgeDays = if ($MinPwdAge -eq 0) { 0 } else { $MinPwdAge / 864000000000 }
-        
-        return @{
-            MaxPasswordAge = [int]$MaxPwdAgeDays
-            MinPasswordAge = [int]$MinPwdAgeDays
-            MinPasswordLength = $Domain.minPwdLength[0]
-            PasswordHistoryLength = $Domain.pwdHistoryLength[0]
-            LockoutThreshold = $Domain.lockoutThreshold[0]
-            LockoutDuration = $Domain.lockoutDuration[0]
-            LockoutObservationWindow = $Domain.lockOutObservationWindow[0]
-        }
-    }
-    catch {
-        Write-Warning "Failed to get password policy via ADSI: $($_.Exception.Message)"
-        return $null
-    }
-}
-
-function Search-ADSI {
-    <#
-    .SYNOPSIS
-    Performs ADSI search with paging support
-    #>
-    param(
-        [string]$Filter,
-        [string]$SearchBase,
-        [string[]]$Properties = @(),
-        [int]$PageSize = 1000,
-        [string]$SearchScope = "Subtree"
-    )
-    
-    try {
-        if (!$SearchBase) {
-            $DomainInfo = Get-ADSIDomainInfo
-            $SearchBase = $DomainInfo.DomainDN
-        }
-        
-        $Searcher = [adsisearcher]""
-        $Searcher.SearchRoot = [ADSI]"LDAP://$SearchBase"
-        $Searcher.Filter = $Filter
-        $Searcher.PageSize = $PageSize
-        $Searcher.SearchScope = $SearchScope
-        
-        if ($Properties.Count -gt 0) {
-            $Searcher.PropertiesToLoad.AddRange($Properties)
-        }
-        
-        $Results = $Searcher.FindAll()
-        
-        $Objects = @()
-        foreach ($Result in $Results) {
-            $Object = @{}
-            foreach ($Property in $Result.Properties.Keys) {
-                $Value = $Result.Properties[$Property]
-                if ($Value.Count -eq 1) {
-                    $Object[$Property] = $Value[0]
-                } else {
-                    $Object[$Property] = $Value
-                }
-            }
-            $Objects += [PSCustomObject]$Object
-        }
-        
-        $Results.Dispose()
-        $Searcher.Dispose()
-        
-        return $Objects
-    }
-    catch {
-        Write-Error "ADSI Search failed: $($_.Exception.Message)"
-        return @()
-    }
-}
-
 function ConvertTo-DateTime {
-    <#
-    .SYNOPSIS
-    Converts various AD timestamp formats to DateTime
-    #>
     param(
         [object]$Value,
         [string]$Format = "FileTime"
@@ -208,15 +60,11 @@ function ConvertTo-DateTime {
                 return [DateTime]::FromFileTime($Value)
             }
             "GeneralizedTime" {
-                # Handle YYYYMMDDHHMMSS.0Z format
                 $dateString = $Value.ToString()
                 if ($dateString -match '(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})') {
                     return [DateTime]::ParseExact($Matches[0], "yyyyMMddHHmmss", $null)
                 }
                 return $null
-            }
-            "UTCTime" {
-                return [DateTime]::ParseExact($Value, "yyMMddHHmmssZ", $null)
             }
             default {
                 return [DateTime]$Value
@@ -227,177 +75,31 @@ function ConvertTo-DateTime {
         return $null
     }
 }
-#endregion
-
-#region Configuration Management
-$Global:Config = @{}
-
-function Get-ADAssessmentConfiguration {
-    param(
-        [string]$ConfigFilePath,
-        [bool]$AutoDetect = $true
-    )
-    
-    # Default configuration with secure fallbacks
-    $DefaultConfig = @{
-        # Thresholds
-        InactiveUserDays = 90
-        InactiveComputerDays = 90
-        StalePasswordDays = 180
-        ExcessiveBadPasswordCount = 100
-        OldComputerPasswordDays = 60
-        MaxDenyACEs = 10
-        CircularGroupDepthLimit = 20
-        SPNDuplicateThreshold = 1
-        
-        # Batch Processing
-        BatchSize = 100
-        MaxParallelJobs = 8
-        ProgressUpdateInterval = 10
-        ComputerProgressInterval = 5
-        
-        # Corruption Detection Severity Thresholds
-        CriticalThresholds = @{
-            MissingCoreAttributes = $true
-            TombstonedObjects = $true
-            UnreadableACLs = $true
-        }
-        
-        HighRiskThresholds = @{
-            UnconstrainedDelegation = $true
-            PasswordNeverExpiresWithDelegation = $true
-            ExcessiveDenyACEs = 10
-            EndOfLifeOS = $true
-            DuplicateSPNs = $true
-        }
-        
-        MediumRiskThresholds = @{
-            OrphanedSIDHistory = $true
-            ExcessiveBadPasswordCount = 100
-            StaleActiveAccounts = 90
-            OldComputerPasswords = 60
-        }
-        
-        # Output Settings
-        OutputSettings = @{
-            ExportBatchSize = 1000
-            UseUTF8Encoding = $true
-            PowerBIOptimized = $true
-            GenerateExecutiveSummary = $true
-        }
-        
-        # Security Settings
-        SecuritySettings = @{
-            PrivilegedGroups = @(
-                "Domain Admins", "Enterprise Admins", "Schema Admins",
-                "Administrators", "Account Operators", "Backup Operators",
-                "Server Operators", "Domain Controllers", "Read-only Domain Controllers",
-                "Group Policy Creator Owners", "Cryptographic Operators"
-            )
-            ServiceAccountIdentifiers = @("svc", "service", "app", "sql", "system", "iis")
-            AdminAccountIdentifiers = @("admin", "adm", "_a$", "-admin", ".admin")
-        }
-        
-        # Assessment Features
-        Features = @{
-            EnableCircularGroupDetection = $true
-            EnableAdvancedSPNAnalysis = $true
-            EnableCMDBValidation = $true
-            EnableDNSAssessment = $true
-            EnableDHCPAssessment = $true
-            EnableCertificateAssessment = $true
-            EnableGPOAssessment = $true
-            EnableSharesAssessment = $true
-            EnablePrintersAssessment = $true
-            EnableInfrastructureAssessment = $true
-            EnableApplicationsAssessment = $true
-            EnableSecurityAssessment = $true
-        }
-    }
-    
-    # Load from file if specified
-    if ($ConfigFilePath -and (Test-Path $ConfigFilePath)) {
-        Write-Host "Loading configuration from: $ConfigFilePath" -ForegroundColor Green
-        try {
-            $FileConfig = Import-PowerShellDataFile -Path $ConfigFilePath
-            foreach ($Key in $FileConfig.Keys) {
-                $DefaultConfig[$Key] = $FileConfig[$Key]
-            }
-            Write-Host "Configuration loaded successfully from file" -ForegroundColor Green
-        }
-        catch {
-            Write-Warning "Failed to load config file: $($_.Exception.Message). Using auto-detection."
-            $AutoDetect = $true
-        }
-    }
-    
-    # Auto-detect organizational settings if enabled
-    if ($AutoDetect) {
-        Write-Host "Auto-detecting organizational settings via ADSI..." -ForegroundColor Yellow
-        
-        try {
-            $PasswordPolicy = Get-ADSIPasswordPolicy
-            if ($PasswordPolicy) {
-                # Use password max age as baseline for inactive user detection
-                if ($PasswordPolicy.MaxPasswordAge -gt 0) {
-                    $DefaultConfig.InactiveUserDays = [math]::Min($PasswordPolicy.MaxPasswordAge, 120)
-                    Write-Host "Auto-detected inactive user threshold: $($DefaultConfig.InactiveUserDays) days" -ForegroundColor Green
-                }
-                
-                # Set stale password threshold to 2x max password age
-                if ($PasswordPolicy.MaxPasswordAge -gt 0) {
-                    $DefaultConfig.StalePasswordDays = [math]::Min($PasswordPolicy.MaxPasswordAge * 2, 365)
-                    Write-Host "Auto-detected stale password threshold: $($DefaultConfig.StalePasswordDays) days" -ForegroundColor Green
-                }
-            }
-        }
-        catch {
-            Write-Warning "Auto-detection failed: $($_.Exception.Message). Using secure defaults."
-        }
-        
-        try {
-            $DomainInfo = Get-ADSIDomainInfo
-            if ($DomainInfo) {
-                $DefaultConfig.DomainFunctionalLevel = $DomainInfo.DomainMode
-                Write-Host "Detected domain functional level: $($DomainInfo.DomainMode)" -ForegroundColor Green
-                
-                # Adjust features based on functional level
-                if ($DomainInfo.DomainMode -lt 3) { # Windows2008R2Domain = 4
-                    Write-Warning "Domain functional level below 2008 R2. Some features may be limited."
-                    $DefaultConfig.SupportsFineGrainedPasswordPolicy = $false
-                }
-                else {
-                    $DefaultConfig.SupportsFineGrainedPasswordPolicy = $true
-                }
-            }
-        }
-        catch {
-            Write-Warning "Could not detect domain functional level: $($_.Exception.Message)"
-            $DefaultConfig.SupportsFineGrainedPasswordPolicy = $true
-        }
-    }
-    
-    return $DefaultConfig
-}
 
 function Get-UACSummary {
-    <#
-    .SYNOPSIS
-    Converts UserAccountControl value to human-readable flags using ADUAC enumeration
-    #>
-    param(
-        [Parameter(Mandatory = $true)]
-        [int]$UACValue
-    )
+    param([int]$UACValue)
     
-    $UACFlags = [ADUAC]$UACValue
+    $Flags = @{
+        ACCOUNTDISABLE = 0x0002
+        LOCKOUT = 0x0010
+        PASSWD_NOTREQD = 0x0020
+        NORMAL_ACCOUNT = 0x0200
+        WORKSTATION_TRUST_ACCOUNT = 0x1000
+        SERVER_TRUST_ACCOUNT = 0x2000
+        DONT_EXPIRE_PASSWORD = 0x10000
+        SMARTCARD_REQUIRED = 0x40000
+        TRUSTED_FOR_DELEGATION = 0x80000
+        NOT_DELEGATED = 0x100000
+        USE_DES_KEY_ONLY = 0x200000
+        DONT_REQ_PREAUTH = 0x400000
+        PASSWORD_EXPIRED = 0x800000
+        TRUSTED_TO_AUTH_FOR_DELEGATION = 0x1000000
+    }
+    
     $ActiveFlags = @()
-    
-    # Check each flag and build readable list
-    $AllFlags = [Enum]::GetValues([ADUAC])
-    foreach ($Flag in $AllFlags) {
-        if ($UACFlags.HasFlag($Flag)) {
-            $ActiveFlags += $Flag.ToString()
+    foreach ($Flag in $Flags.GetEnumerator()) {
+        if ($UACValue -band $Flag.Value) {
+            $ActiveFlags += $Flag.Key
         }
     }
     
@@ -405,27 +107,23 @@ function Get-UACSummary {
         RawValue = $UACValue
         Flags = $ActiveFlags
         FlagsString = $ActiveFlags -join '; '
-        IsDisabled = $UACFlags.HasFlag([ADUAC]::ACCOUNTDISABLE)
-        IsLocked = $UACFlags.HasFlag([ADUAC]::LOCKOUT)
-        PasswordNeverExpires = $UACFlags.HasFlag([ADUAC]::DONT_EXPIRE_PASSWORD)
-        PasswordNotRequired = $UACFlags.HasFlag([ADUAC]::PASSWD_NOTREQD)
-        SmartCardRequired = $UACFlags.HasFlag([ADUAC]::SMARTCARD_REQUIRED)
-        TrustedForDelegation = $UACFlags.HasFlag([ADUAC]::TRUSTED_FOR_DELEGATION)
-        TrustedForAuthDelegation = $UACFlags.HasFlag([ADUAC]::TRUSTED_TO_AUTH_FOR_DELEGATION)
-        DontRequirePreauth = $UACFlags.HasFlag([ADUAC]::DONT_REQ_PREAUTH)
-        IsNormalAccount = $UACFlags.HasFlag([ADUAC]::NORMAL_ACCOUNT)
-        IsComputerAccount = $UACFlags.HasFlag([ADUAC]::WORKSTATION_TRUST_ACCOUNT) -or $UACFlags.HasFlag([ADUAC]::SERVER_TRUST_ACCOUNT)
-        PasswordExpired = $UACFlags.HasFlag([ADUAC]::PASSWORD_EXPIRED)
-        NotDelegated = $UACFlags.HasFlag([ADUAC]::NOT_DELEGATED)
-        UseDESKeyOnly = $UACFlags.HasFlag([ADUAC]::USE_DES_KEY_ONLY)
+        IsDisabled = ($UACValue -band 0x0002) -ne 0
+        IsLocked = ($UACValue -band 0x0010) -ne 0
+        PasswordNeverExpires = ($UACValue -band 0x10000) -ne 0
+        PasswordNotRequired = ($UACValue -band 0x0020) -ne 0
+        SmartCardRequired = ($UACValue -band 0x40000) -ne 0
+        TrustedForDelegation = ($UACValue -band 0x80000) -ne 0
+        TrustedForAuthDelegation = ($UACValue -band 0x1000000) -ne 0
+        DontRequirePreauth = ($UACValue -band 0x400000) -ne 0
+        IsNormalAccount = ($UACValue -band 0x0200) -ne 0
+        IsComputerAccount = (($UACValue -band 0x1000) -ne 0) -or (($UACValue -band 0x2000) -ne 0)
+        PasswordExpired = ($UACValue -band 0x800000) -ne 0
+        NotDelegated = ($UACValue -band 0x100000) -ne 0
+        UseDESKeyOnly = ($UACValue -band 0x200000) -ne 0
     }
 }
 
 function Test-AccountType {
-    <#
-    .SYNOPSIS
-    Intelligently determines account type based on naming patterns and UAC flags
-    #>
     param(
         [string]$SamAccountName,
         [string]$Description,
@@ -433,10 +131,9 @@ function Test-AccountType {
         [int]$AdminCount = 0
     )
     
-    $ServiceIndicators = $Global:Config.SecuritySettings.ServiceAccountIdentifiers
-    $AdminIndicators = $Global:Config.SecuritySettings.AdminAccountIdentifiers
+    $ServiceIndicators = @("svc", "service", "app", "sql", "system", "iis")
+    $AdminIndicators = @("admin", "adm", "_a$", "-admin", ".admin")
     
-    # Check for service account patterns
     $IsServiceAccount = $false
     foreach ($Pattern in $ServiceIndicators) {
         if ($SamAccountName -match $Pattern -or $Description -match $Pattern) {
@@ -445,7 +142,6 @@ function Test-AccountType {
         }
     }
     
-    # Check for admin account patterns
     $IsAdminAccount = $false
     if ($AdminCount -eq 1) {
         $IsAdminAccount = $true
@@ -459,7 +155,6 @@ function Test-AccountType {
         }
     }
     
-    # Determine account type with precedence rules
     if ($UACAnalysis.IsComputerAccount) {
         return "Computer Account"
     }
@@ -478,13 +173,7 @@ function Test-AccountType {
 }
 
 function Get-CorruptionLevel {
-    <#
-    .SYNOPSIS
-    Determines corruption level based on configurable severity thresholds
-    #>
-    param(
-        [array]$Issues
-    )
+    param([array]$Issues)
     
     if (!$Issues -or $Issues.Count -eq 0) { return "Clean" }
     
@@ -499,9 +188,7 @@ function Get-CorruptionLevel {
     elseif ($LowCount -gt 0) { return "Low" }
     else { return "Clean" }
 }
-#endregion
 
-#region Utility Functions
 function Get-ETA {
     param(
         [int]$Current,
@@ -525,34 +212,33 @@ function Get-ETA {
     }
 }
 
-function Write-Log {
-    param($Message)
-    $LogMessage = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - $Message"
-    $LogMessage | Out-File -FilePath $Global:LogFile -Append
-    Write-Host $LogMessage
+# INITIALIZE GLOBAL CONFIGURATION
+$Global:Config = @{
+    InactiveUserDays = 90
+    InactiveComputerDays = 90
+    StalePasswordDays = 180
+    BatchSize = 100
+    ProgressUpdateInterval = 10
+    CircularGroupDepthLimit = 20
+    
+    MediumRiskThresholds = @{
+        ExcessiveBadPasswordCount = 100
+    }
+    
+    OutputSettings = @{
+        ExportBatchSize = 1000
+        PowerBIOptimized = $true
+    }
+    
+    SecuritySettings = @{
+        ServiceAccountIdentifiers = @("svc", "service", "app", "sql", "system", "iis")
+        AdminAccountIdentifiers = @("admin", "adm", "_a$", "-admin", ".admin")
+    }
 }
-#endregion
 
-#region Global Configuration Initialization
-# Load configuration on script start
-Write-Host "Initializing Enhanced AD Assessment Core Infrastructure..." -ForegroundColor Cyan
-$Global:Config = Get-ADAssessmentConfiguration -ConfigFilePath $ConfigFile -AutoDetect $UseAutoDetection
-
-# Override with command-line parameters if specified
-if ($PSBoundParameters.ContainsKey('InactiveUserDays')) {
-    $Global:Config.InactiveUserDays = $InactiveUserDays
-    Write-Host "Using command-line inactive user threshold: $InactiveUserDays days" -ForegroundColor Green
-}
-
-if ($PSBoundParameters.ContainsKey('InactiveComputerDays')) {
-    $Global:Config.InactiveComputerDays = $InactiveComputerDays
-    Write-Host "Using command-line inactive computer threshold: $InactiveComputerDays days" -ForegroundColor Green
-}
-
-# Global variables
+# Set up global variables
 $Global:OutputPath = $OutputPath
 $Global:StartTime = Get-Date
-$Global:ProgressPreference = 'Continue'
 
 # Create output directory
 if (!(Test-Path $Global:OutputPath)) {
@@ -562,33 +248,490 @@ if (!(Test-Path $Global:OutputPath)) {
 # Create log file
 $Global:LogFile = "$Global:OutputPath\AD_Assessment_Log_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
 
-Write-Host "Configuration Summary:" -ForegroundColor Yellow
-Write-Host "- Inactive User Threshold: $($Global:Config.InactiveUserDays) days" -ForegroundColor White
-Write-Host "- Inactive Computer Threshold: $($Global:Config.InactiveComputerDays) days" -ForegroundColor White
-Write-Host "- Stale Password Threshold: $($Global:Config.StalePasswordDays) days" -ForegroundColor White
-Write-Host "- Output Directory: $Global:OutputPath" -ForegroundColor White
-Write-Host "- Using ADSI (No AD Module Required)" -ForegroundColor Green
-Write-Host ""
-
-Write-Log "Enhanced AD Assessment Core Infrastructure Initialized"
-Write-Log "Configuration: Inactive Users: $($Global:Config.InactiveUserDays)d, Inactive Computers: $($Global:Config.InactiveComputerDays)d"
-Write-Log "ADSI-based implementation - No AD Module or WinRM dependencies"
-
-# Test ADSI connectivity
-try {
-    $DomainTest = Get-ADSIDomainInfo
-    if ($DomainTest) {
-        Write-Host "✓ ADSI connectivity verified - Domain: $($DomainTest.DomainName)" -ForegroundColor Green
-        Write-Log "ADSI connectivity verified - Domain: $($DomainTest.DomainName)"
+# Try to load core script to override defaults (optional)
+$CoreScript = Join-Path (Split-Path $MyInvocation.MyCommand.Path) "00-AD-Assessment-Core.ps1"
+if (Test-Path $CoreScript) {
+    try {
+        . $CoreScript -OutputPath $OutputPath -ConfigFile $ConfigFile
+        Write-Host "Core infrastructure loaded - configuration may have been updated" -ForegroundColor Green
+    } catch {
+        Write-Host "Core script found but failed to load. Using defaults." -ForegroundColor Yellow
     }
-    else {
-        Write-Warning "ADSI connectivity test failed"
-    }
-}
-catch {
-    Write-Error "Failed to initialize ADSI connectivity: $($_.Exception.Message)"
-    exit 1
+} else {
+    Write-Host "Core script not found. Using default configuration." -ForegroundColor Yellow
 }
 
-Write-Host "Core infrastructure ready. Run individual assessment scripts..." -ForegroundColor Green
-#endregion
+# MAIN ASSESSMENT FUNCTION
+function Get-ADUsersAssessmentEnhanced {
+    Write-Log "=== Starting Enhanced AD Users Assessment with ADUAC Enumeration (ADSI) ==="
+    
+    $ScriptStartTime = Get-Date
+    $InactiveThreshold = (Get-Date).AddDays(-$Global:Config.InactiveUserDays)
+    $StalePasswordThreshold = (Get-Date).AddDays(-$Global:Config.StalePasswordDays)
+    
+    # Get domain info
+    $DomainInfo = Get-ADSIDomainInfo
+    if (!$DomainInfo) {
+        Write-Error "Failed to get domain information"
+        return
+    }
+    
+    Write-Host "Getting total user count via ADSI..." -ForegroundColor Yellow
+    
+    # Count total users first
+    $CountSearcher = [adsisearcher]"(&(objectCategory=person)(objectClass=user))"
+    $CountSearcher.SearchRoot = [ADSI]"LDAP://$($DomainInfo.DomainDN)"
+    $CountSearcher.PageSize = 1000
+    $CountResults = $CountSearcher.FindAll()
+    $TotalUserCount = $CountResults.Count
+    $CountResults.Dispose()
+    $CountSearcher.Dispose()
+    
+    Write-Log "Total AD Users found: $TotalUserCount"
+    
+    # Initialize collections
+    $AllUsers = @()
+    $CorruptedUsers = @()
+    $ProcessedCount = 0
+    
+    # Get all user properties needed for enhanced analysis
+    $UserProperties = @(
+        'samaccountname', 'displayname', 'userprincipalname', 'useraccountcontrol',
+        'lastlogontimestamp', 'pwdlastset', 'whencreated', 'description',
+        'department', 'title', 'manager', 'memberof', 'distinguishedname', 
+        'mail', 'employeeid', 'badpwdcount', 'lockouttime', 'logonworkstations',
+        'sidhistory', 'admincount', 'objectsid', 'isdeleted'
+    )
+    
+    # Create main searcher with paging
+    $Searcher = [adsisearcher]"(&(objectCategory=person)(objectClass=user))"
+    $Searcher.SearchRoot = [ADSI]"LDAP://$($DomainInfo.DomainDN)"
+    $Searcher.PageSize = $Global:Config.BatchSize
+    $Searcher.PropertiesToLoad.AddRange($UserProperties)
+    
+    Write-Host "Processing $TotalUserCount users with enhanced ADUAC analysis via ADSI..." -ForegroundColor Green
+    
+    try {
+        $Results = $Searcher.FindAll()
+        
+        foreach ($Result in $Results) {
+            $ProcessedCount++
+            
+            # Update progress at configurable intervals
+            if ($ProcessedCount % $Global:Config.ProgressUpdateInterval -eq 0) {
+                $PercentComplete = ($ProcessedCount / $TotalUserCount) * 100
+                $ETA = Get-ETA -Current $ProcessedCount -Total $TotalUserCount -StartTime $ScriptStartTime
+                
+                Write-Progress -Activity "Processing AD Users with Enhanced ADUAC Analysis (ADSI)" `
+                    -Status "Processing user $ProcessedCount of $TotalUserCount - ETA: $ETA" `
+                    -PercentComplete $PercentComplete `
+                    -CurrentOperation "Analyzing: $($Result.Properties['samaccountname'][0])"
+            }
+            
+            try {
+                $UserProps = $Result.Properties
+                
+                # Extract core properties
+                $SamAccountName = if ($UserProps['samaccountname']) { $UserProps['samaccountname'][0] } else { "" }
+                $DisplayName = if ($UserProps['displayname']) { $UserProps['displayname'][0] } else { "" }
+                $UPN = if ($UserProps['userprincipalname']) { $UserProps['userprincipalname'][0] } else { "" }
+                $Email = if ($UserProps['mail']) { $UserProps['mail'][0] } else { "" }
+                $EmployeeID = if ($UserProps['employeeid']) { $UserProps['employeeid'][0] } else { "" }
+                $Description = if ($UserProps['description']) { $UserProps['description'][0] } else { "" }
+                $Department = if ($UserProps['department']) { $UserProps['department'][0] } else { "" }
+                $Title = if ($UserProps['title']) { $UserProps['title'][0] } else { "" }
+                $DistinguishedName = if ($UserProps['distinguishedname']) { $UserProps['distinguishedname'][0] } else { "" }
+                
+                # Convert timestamps
+                $LastLogon = ConvertTo-DateTime -Value $UserProps['lastlogontimestamp'][0] -Format "FileTime"
+                $PwdLastSet = ConvertTo-DateTime -Value $UserProps['pwdlastset'][0] -Format "FileTime"
+                $WhenCreated = ConvertTo-DateTime -Value $UserProps['whencreated'][0] -Format "GeneralizedTime"
+                
+                # UAC Analysis
+                $UAC = if ($UserProps['useraccountcontrol']) { [int]$UserProps['useraccountcontrol'][0] } else { 0 }
+                $UACAnalysis = Get-UACSummary -UACValue $UAC
+                
+                # Additional properties for corruption analysis
+                $BadPwdCount = if ($UserProps['badpwdcount']) { [int]$UserProps['badpwdcount'][0] } else { 0 }
+                $LockoutTime = if ($UserProps['lockouttime']) { $UserProps['lockouttime'][0] } else { $null }
+                $LogonWorkstations = if ($UserProps['logonworkstations']) { $UserProps['logonworkstations'][0] } else { "" }
+                $AdminCount = if ($UserProps['admincount']) { [int]$UserProps['admincount'][0] } else { 0 }
+                $ObjectSID = if ($UserProps['objectsid']) { $UserProps['objectsid'][0] } else { $null }
+                $IsDeleted = if ($UserProps['isdeleted']) { [bool]$UserProps['isdeleted'][0] } else { $false }
+                
+                # SIDHistory analysis
+                $SIDHistoryCount = 0
+                $SIDHistoryIssues = 0
+                if ($UserProps['sidhistory']) {
+                    $SIDHistoryCount = $UserProps['sidhistory'].Count
+                    $SIDHistoryIssues = $SIDHistoryCount
+                }
+                
+                # Group membership analysis
+                $GroupCount = 0
+                $MemberOfGroups = ""
+                if ($UserProps['memberof']) {
+                    $GroupCount = $UserProps['memberof'].Count
+                    $GroupNames = @()
+                    foreach ($GroupDN in $UserProps['memberof']) {
+                        if ($GroupDN -match '^CN=([^,]+)') {
+                            $GroupNames += $Matches[1]
+                        }
+                    }
+                    $MemberOfGroups = $GroupNames -join '; '
+                }
+                
+                # CORRUPTION DETECTION
+                $CorruptionIssues = @()
+                
+                # 1. Missing Required Attributes (Critical)
+                if (!$SamAccountName) {
+                    $CorruptionIssues += [PSCustomObject]@{
+                        Issue = "Missing SamAccountName"
+                        Severity = "Critical"
+                        Description = "User account missing required SamAccountName"
+                    }
+                }
+                
+                if (!$ObjectSID) {
+                    $CorruptionIssues += [PSCustomObject]@{
+                        Issue = "Missing ObjectSID"
+                        Severity = "Critical"
+                        Description = "User account missing security identifier"
+                    }
+                }
+                
+                if (!$DistinguishedName) {
+                    $CorruptionIssues += [PSCustomObject]@{
+                        Issue = "Missing DistinguishedName"
+                        Severity = "Critical"
+                        Description = "User account missing distinguished name"
+                    }
+                }
+                
+                # 2. UAC Flag Conflicts (High)
+                $UserEnabled = !$UACAnalysis.IsDisabled
+                
+                # 3. Enhanced Password Policy Violations (High)
+                if ($UACAnalysis.PasswordNeverExpires -and $UACAnalysis.TrustedForDelegation) {
+                    $CorruptionIssues += [PSCustomObject]@{
+                        Issue = "Password Never Expires with Delegation"
+                        Severity = "High"
+                        Description = "Account has DONT_EXPIRE_PASSWORD and TRUSTED_FOR_DELEGATION flags"
+                    }
+                }
+                
+                if ($UACAnalysis.PasswordNotRequired) {
+                    $CorruptionIssues += [PSCustomObject]@{
+                        Issue = "Password Not Required"
+                        Severity = "High"
+                        Description = "Account configured with PASSWD_NOTREQD flag"
+                    }
+                }
+                
+                # 4. Bad Password Count (Medium)
+                if ($BadPwdCount -gt $Global:Config.MediumRiskThresholds.ExcessiveBadPasswordCount) {
+                    $CorruptionIssues += [PSCustomObject]@{
+                        Issue = "Excessive Bad Password Count"
+                        Severity = "Medium"
+                        Description = "Bad password count exceeds threshold: $BadPwdCount > $($Global:Config.MediumRiskThresholds.ExcessiveBadPasswordCount)"
+                    }
+                }
+                
+                # 5. Ancient Lockout Times (Low)
+                if ($LockoutTime -and [long]$LockoutTime -gt 0) {
+                    $LockoutDate = ConvertTo-DateTime -Value $LockoutTime -Format "FileTime"
+                    if ($LockoutDate -and $LockoutDate -lt (Get-Date).AddYears(-1)) {
+                        $CorruptionIssues += [PSCustomObject]@{
+                            Issue = "Ancient Lockout Time"
+                            Severity = "Low"
+                            Description = "Lockout time older than 1 year"
+                        }
+                    }
+                }
+                
+                # 6. Delegation Analysis
+                $DelegationType = "None"
+                $DelegationRisk = "Low"
+                
+                if ($UACAnalysis.TrustedForDelegation) {
+                    $DelegationType = "Unconstrained"
+                    $DelegationRisk = "High"
+                    $CorruptionIssues += [PSCustomObject]@{
+                        Issue = "Unconstrained Delegation"
+                        Severity = "High"
+                        Description = "Account trusted for unconstrained delegation (TRUSTED_FOR_DELEGATION)"
+                    }
+                }
+                elseif ($UACAnalysis.TrustedForAuthDelegation) {
+                    $DelegationType = "Constrained"
+                    $DelegationRisk = "Medium"
+                }
+                
+                # 7. Advanced Security Analysis
+                $SecurityRiskFactors = @()
+                
+                if ($UACAnalysis.DontRequirePreauth) {
+                    $SecurityRiskFactors += "No Preauth Required"
+                    $CorruptionIssues += [PSCustomObject]@{
+                        Issue = "Kerberos Preauth Not Required"
+                        Severity = "High"
+                        Description = "Account configured with DONT_REQ_PREAUTH flag"
+                    }
+                }
+                
+                if ($UACAnalysis.SmartCardRequired -and !$UserEnabled) {
+                    $CorruptionIssues += [PSCustomObject]@{
+                        Issue = "Smart Card Required but Disabled"
+                        Severity = "Medium"
+                        Description = "Account requires smart card but is disabled"
+                    }
+                }
+                
+                if ($UACAnalysis.UseDESKeyOnly) {
+                    $SecurityRiskFactors += "DES Keys Only"
+                    $CorruptionIssues += [PSCustomObject]@{
+                        Issue = "Weak Encryption (DES Only)"
+                        Severity = "High"
+                        Description = "Account configured to use DES encryption only"
+                    }
+                }
+                
+                # 8. Orphaned SIDHistory Detection (Medium)
+                if ($SIDHistoryIssues -gt 0) {
+                    $CorruptionIssues += [PSCustomObject]@{
+                        Issue = "Orphaned SIDHistory Entry"
+                        Severity = "Medium"
+                        Description = "Account has $SIDHistoryIssues potentially orphaned SIDHistory entries"
+                    }
+                }
+                
+                # 9. Tombstoned Object Detection (Critical)
+                if ($IsDeleted) {
+                    $CorruptionIssues += [PSCustomObject]@{
+                        Issue = "Tombstoned Object"
+                        Severity = "Critical"
+                        Description = "User object is marked as deleted but still accessible"
+                    }
+                }
+                
+                # 10. Account Type Detection
+                $AccountType = Test-AccountType -SamAccountName $SamAccountName -Description $Description -UACAnalysis $UACAnalysis -AdminCount $AdminCount
+                
+                # 11. Activity Analysis
+                $IsActive = $UserEnabled -and (
+                    ($LastLogon -and $LastLogon -gt $InactiveThreshold) -or 
+                    ($PwdLastSet -and $PwdLastSet -gt $InactiveThreshold)
+                )
+                
+                $IsStale = $LastLogon -and $LastLogon -lt $InactiveThreshold
+                if ($IsStale -and $UserEnabled) {
+                    $CorruptionIssues += [PSCustomObject]@{
+                        Issue = "Stale Active Account"
+                        Severity = "Medium"
+                        Description = "Enabled account not used in $($Global:Config.InactiveUserDays)+ days"
+                    }
+                }
+                
+                # 12. Password Age Analysis
+                $PasswordAge = if ($PwdLastSet) { (Get-Date) - $PwdLastSet } else { $null }
+                $HasStalePassword = $PasswordAge -and $PasswordAge.TotalDays -gt $Global:Config.StalePasswordDays
+                
+                if ($HasStalePassword -and $UserEnabled) {
+                    $CorruptionIssues += [PSCustomObject]@{
+                        Issue = "Stale Password"
+                        Severity = "Medium"  
+                        Description = "Password older than $($Global:Config.StalePasswordDays) days"
+                    }
+                }
+                
+                # 13. Service Account Risk Assessment
+                $IsServiceAccount = $AccountType -eq "Service Account"
+                
+                if ($IsServiceAccount) {
+                    if ($UACAnalysis.PasswordNeverExpires -and $UACAnalysis.TrustedForDelegation) {
+                        $CorruptionIssues += [PSCustomObject]@{
+                            Issue = "Risky Service Account Config"
+                            Severity = "High"
+                            Description = "Service account with password never expires AND delegation rights"
+                        }
+                    }
+                    if ($AdminCount -eq 1) {
+                        $CorruptionIssues += [PSCustomObject]@{
+                            Issue = "Service Account with Admin Rights"
+                            Severity = "High"
+                            Description = "Service account has administrative privileges"
+                        }
+                    }
+                }
+                
+                # 14. Disabled but Still Grouped Detection
+                if (!$UserEnabled -and $GroupCount -gt 1) {
+                    $CorruptionIssues += [PSCustomObject]@{
+                        Issue = "Disabled But Still Grouped"
+                        Severity = "Medium"
+                        Description = "Disabled account still member of $GroupCount groups"
+                    }
+                }
+                
+                # Create enhanced user object
+                $UserObject = [PSCustomObject]@{
+                    SamAccountName = $SamAccountName
+                    DisplayName = $DisplayName
+                    UserPrincipalName = $UPN
+                    EmailAddress = $Email
+                    EmployeeID = $EmployeeID
+                    Enabled = $UserEnabled
+                    LastLogonDate = $LastLogon
+                    PasswordLastSet = $PwdLastSet
+                    WhenCreated = $WhenCreated
+                    Description = $Description
+                    Department = $Department
+                    Title = $Title
+                    AccountType = $AccountType
+                    IsActive = $IsActive
+                    IsStale = $IsStale
+                    
+                    # Enhanced Security Attributes
+                    UserAccountControl = $UAC
+                    UACFlags = $UACAnalysis.FlagsString
+                    IsDisabled = $UACAnalysis.IsDisabled
+                    IsLocked = $UACAnalysis.IsLocked
+                    PasswordNeverExpires = $UACAnalysis.PasswordNeverExpires
+                    PasswordNotRequired = $UACAnalysis.PasswordNotRequired
+                    SmartCardRequired = $UACAnalysis.SmartCardRequired
+                    DelegationType = $DelegationType
+                    DelegationRisk = $DelegationRisk
+                    TrustedForDelegation = $UACAnalysis.TrustedForDelegation
+                    TrustedForAuthDelegation = $UACAnalysis.TrustedForAuthDelegation
+                    DontRequirePreauth = $UACAnalysis.DontRequirePreauth
+                    NotDelegated = $UACAnalysis.NotDelegated
+                    UseDESKeyOnly = $UACAnalysis.UseDESKeyOnly
+                    PasswordExpired = $UACAnalysis.PasswordExpired
+                    
+                    # Enhanced Analysis
+                    BadPasswordCount = $BadPwdCount
+                    LockoutTime = $LockoutTime
+                    LogonWorkstations = $LogonWorkstations
+                    PasswordAgeDays = if ($PasswordAge) { [math]::Round($PasswordAge.TotalDays) } else { $null }
+                    HasStalePassword = $HasStalePassword
+                    SIDHistoryCount = $SIDHistoryCount
+                    SIDHistoryIssues = $SIDHistoryIssues
+                    GroupCount = $GroupCount
+                    MemberOfGroups = $MemberOfGroups
+                    AdminCount = $AdminCount
+                    SecurityRiskFactors = $SecurityRiskFactors -join '; '
+                    
+                    # Corruption Analysis
+                    CorruptionIssuesCount = $CorruptionIssues.Count
+                    CorruptionLevel = Get-CorruptionLevel -Issues $CorruptionIssues
+                    HasCorruption = $CorruptionIssues.Count -gt 0
+                    CorruptionSummary = if ($CorruptionIssues.Count -gt 0) { 
+                        ($CorruptionIssues.Issue -join '; ') 
+                    } else { 
+                        "No Issues Detected" 
+                    }
+                }
+                
+                $AllUsers += $UserObject
+                
+                # Track corrupted users
+                if ($CorruptionIssues.Count -gt 0) {
+                    foreach ($Issue in $CorruptionIssues) {
+                        $CorruptedUsers += [PSCustomObject]@{
+                            SamAccountName = $SamAccountName
+                            DisplayName = $DisplayName
+                            AccountType = $AccountType
+                            IssueType = $Issue.Issue
+                            Severity = $Issue.Severity
+                            IssueDescription = $Issue.Description
+                            Enabled = $UserEnabled
+                            LastLogonDate = $LastLogon
+                            UACFlags = $UACAnalysis.FlagsString
+                        }
+                    }
+                }
+                
+                # Export in batches
+                if ($AllUsers.Count -ge $Global:Config.OutputSettings.ExportBatchSize) {
+                    $AllUsers | Export-Csv "$Global:OutputPath\Users_Enhanced.csv" -NoTypeInformation -Append
+                    $AllUsers = @()
+                }
+                
+            } catch {
+                Write-Log "Error processing user $SamAccountName : $($_.Exception.Message)"
+            }
+        }
+        
+        # Export remaining users
+        if ($AllUsers.Count -gt 0) {
+            $AllUsers | Export-Csv "$Global:OutputPath\Users_Enhanced.csv" -NoTypeInformation -Append
+        }
+        
+        Write-Progress -Activity "Processing AD Users" -Completed
+        Write-Log "Enhanced user processing completed. Generating advanced reports..."
+        
+        # Generate Enhanced Reports
+        if ($Global:Config.OutputSettings.PowerBIOptimized) {
+            $AllUsersData = Import-Csv "$Global:OutputPath\Users_Enhanced.csv"
+            
+            # Export corrupted users
+            if ($CorruptedUsers.Count -gt 0) {
+                $CorruptedUsers | Export-Csv "$Global:OutputPath\Users_Corrupted.csv" -NoTypeInformation
+            }
+            
+            # High Risk Service Accounts
+            $HighRiskServiceAccounts = $AllUsersData | Where-Object {
+                $_.AccountType -eq "Service Account" -and 
+                ($_.CorruptionLevel -eq "High" -or $_.CorruptionLevel -eq "Critical" -or
+                 $_.DelegationRisk -eq "High" -or $_.AdminCount -eq 1)
+            }
+            if ($HighRiskServiceAccounts.Count -gt 0) {
+                $HighRiskServiceAccounts | Export-Csv "$Global:OutputPath\Service_Accounts_High_Risk.csv" -NoTypeInformation
+            }
+            
+            # Stale Admin Accounts
+            $StaleAdminAccounts = $AllUsersData | Where-Object {
+                $_.AccountType -eq "Admin Account" -and $_.IsStale -eq "True"
+            }
+            if ($StaleAdminAccounts.Count -gt 0) {
+                $StaleAdminAccounts | Export-Csv "$Global:OutputPath\Admin_Accounts_Stale.csv" -NoTypeInformation
+            }
+            
+            # Disabled But Still Grouped
+            $DisabledButGrouped = $CorruptedUsers | Where-Object {$_.IssueType -eq "Disabled But Still Grouped"}
+            if ($DisabledButGrouped.Count -gt 0) {
+                $DisabledButGrouped | Export-Csv "$Global:OutputPath\Users_Disabled_But_Grouped.csv" -NoTypeInformation
+            }
+            
+            # Accounts with Delegation Rights
+            $DelegationAccounts = $AllUsersData | Where-Object {$_.DelegationType -ne "None"}
+            if ($DelegationAccounts.Count -gt 0) {
+                $DelegationAccounts | Export-Csv "$Global:OutputPath\Users_With_Delegation_Rights.csv" -NoTypeInformation
+            }
+            
+            # Stale Accounts by Type
+            $StaleAccounts = $AllUsersData | Where-Object {$_.IsStale -eq "True"}
+            if ($StaleAccounts.Count -gt 0) {
+                $StaleAccounts | Export-Csv "$Global:OutputPath\Users_Stale_Accounts.csv" -NoTypeInformation
+            }
+        }
+        
+        $ProcessingTime = ((Get-Date) - $ScriptStartTime).TotalMinutes
+        Write-Log "Enhanced user assessment completed in $([math]::Round($ProcessingTime, 2)) minutes"
+        
+        # Cleanup
+        $Results.Dispose()
+        $Searcher.Dispose()
+        [GC]::Collect()
+        
+    } catch {
+        Write-Log "Critical error in enhanced user assessment: $($_.Exception.Message)"
+        throw
+    }
+}
+
+# EXECUTE THE ASSESSMENT
+Write-Host "`nStarting AD Users Enhanced Assessment..." -ForegroundColor Cyan
+Get-ADUsersAssessmentEnhanced
+Write-Host "`nEnhanced Users Assessment completed. Results in: $Global:OutputPath" -ForegroundColor Green
