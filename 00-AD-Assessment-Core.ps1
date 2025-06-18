@@ -583,7 +583,7 @@ Write-Log "ADSI-based implementation - No AD Module or WinRM dependencies"
 try {
     $DomainTest = Get-ADSIDomainInfo
     if ($DomainTest) {
-        Write-Host "✓ ADSI connectivity verified - Domain: $($DomainTest.DomainName)" -ForegroundColor Green
+        Write-Host "ADSI connectivity verified - Domain: $($DomainTest.DomainName)" -ForegroundColor Green
         Write-Log "ADSI connectivity verified - Domain: $($DomainTest.DomainName)"
     }
     else {
@@ -595,5 +595,5 @@ catch {
     exit 1
 }
 
-Write-Host "Core infrastructure ready. Run individual assessment scripts..." -ForegroundColor Green
+Write-Host "Core infrastructure ready. Run individual assessment scripts." -ForegroundColor Green
 #endregion
