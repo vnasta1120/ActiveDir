@@ -1,30 +1,30 @@
 PS C:\Scripts> .\AD-Users-Enhanced-Assessment.ps1
-WARNING: Failed to load core script: At C:\Scripts\00-AD-Assessment-Core.ps1:596 char:76
+WARNING: Failed to load core script: At C:\Scripts\00-AD-Assessment-Core.ps1:598 char:76
 + ... e ready. Run individual assessment scripts..." -ForegroundColor Green
 +                                                  ~~~~~~~~~~~~~~~~~~~~~~~~
 The string is missing the terminator: ".
 
-At C:\Scripts\00-AD-Assessment-Core.ps1:583 char:22
+At C:\Scripts\00-AD-Assessment-Core.ps1:585 char:22
 +     if ($DomainTest) {
 +                      ~
 Missing closing '}' in statement block or type definition.
 
-At C:\Scripts\00-AD-Assessment-Core.ps1:581 char:5
+At C:\Scripts\00-AD-Assessment-Core.ps1:583 char:5
 + try {
 +     ~
 Missing closing '}' in statement block or type definition.
 
-At C:\Scripts\00-AD-Assessment-Core.ps1:597 char:11
+At C:\Scripts\00-AD-Assessment-Core.ps1:599 char:11
 + #endregion
 +           ~
 The Try statement is missing its Catch or Finally block.
 Using embedded core functions...
 Using embedded configuration with defaults
-2025-06-18 12:37:13 - === Starting Enhanced AD Users Assessment with ADUAC Enumeration (ADSI) ===
+2025-06-18 14:00:15 - === Starting Enhanced AD Users Assessment with ADUAC Enumeration (ADSI) ===
 Getting total user count via ADSI...
-2025-06-18 12:38:17 - Total AD Users found: 12091
+2025-06-18 14:01:10 - Total AD Users found: 12091
 Processing 12091 users with enhanced ADUAC analysis via ADSI...
-2025-06-18 12:39:04 - Enhanced user processing completed. Generating advanced reports...
-2025-06-18 12:39:07 - Enhanced user assessment completed in 1.9 minutes
+2025-06-18 14:01:58 - Enhanced user processing completed. Generating advanced reports...
+2025-06-18 14:02:01 - Enhanced user assessment completed in 1.77 minutes
 Enhanced Users Assessment completed. Results in: C:\AD_Assessment
 PS C:\Scripts>
