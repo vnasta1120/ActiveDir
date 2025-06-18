@@ -18,7 +18,18 @@ $CoreLoaded = $false
 
 if (Test-Path $CoreScript) {
     try {
-        . $CoreScript -OutputPath $OutputPath -ConfigFile $ConfigFile
+        # Build parameters hash table for splatting
+        $CoreParams = @{
+            OutputPath = $OutputPath
+        }
+        
+        # Only add ConfigFile if it's not empty
+        if (![string]::IsNullOrEmpty($ConfigFile)) {
+            $CoreParams['ConfigFile'] = $ConfigFile
+        }
+        
+        # Load core script with splatting
+        . $CoreScript @CoreParams
         $CoreLoaded = $true
         Write-Host "Core infrastructure loaded successfully" -ForegroundColor Green
     } catch {
