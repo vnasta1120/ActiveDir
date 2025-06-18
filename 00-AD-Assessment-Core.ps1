@@ -531,7 +531,9 @@ function global:Get-ETA {
 function global:Write-Log {
     param($Message)
     $LogMessage = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - $Message"
-    $LogMessage | Out-File -FilePath $Global:LogFile -Append -ErrorAction SilentlyContinue
+    if ($Global:LogFile) {
+        $LogMessage | Out-File -FilePath $Global:LogFile -Append -ErrorAction SilentlyContinue
+    }
     Write-Host $LogMessage
 }
 #endregion
