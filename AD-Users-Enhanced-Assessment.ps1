@@ -12,267 +12,267 @@ param(
     [string]$ConfigFile
 )
 
-# Embedded minimal core functions if main core script fails
-if (-not $Global:Config) {
-    # Try to load the core script first
-    $CoreScript = Join-Path (Split-Path $MyInvocation.MyCommand.Path) "00-AD-Assessment-Core.ps1"
-    $CoreLoaded = $false
-    
-    if (Test-Path $CoreScript) {
-        try {
-            . $CoreScript -OutputPath $OutputPath -ConfigFile $ConfigFile
-            $CoreLoaded = $true
-        } catch {
-            Write-Warning "Failed to load core script: $($_.Exception.Message)"
-        }
-    }
-    
-    # If core script failed or not found, use embedded minimal functions
-    if (-not $CoreLoaded) {
-        Write-Host "Using embedded core functions..." -ForegroundColor Yellow
-        
-        # Minimal required functions
-        function Get-ADSIDomainInfo {
-            try {
-                $RootDSE = [ADSI]"LDAP://RootDSE"
-                $DomainDN = $RootDSE.defaultNamingContext[0]
-                $Domain = [ADSI]"LDAP://$DomainDN"
-                
-                return @{
-                    DomainDN = $DomainDN
-                    DomainName = $Domain.name[0]
-                    DistinguishedName = $DomainDN
-                }
-            }
-            catch {
-                Write-Warning "Failed to get domain info via ADSI: $($_.Exception.Message)"
-                return $null
-            }
-        }
-        
-        function ConvertTo-DateTime {
-            param(
-                [object]$Value,
-                [string]$Format = "FileTime"
-            )
-            
-            try {
-                if (!$Value -or $Value -eq 0 -or $Value -eq "0") {
-                    return $null
-                }
-                
-                switch ($Format) {
-                    "FileTime" {
-                        if ($Value -is [string]) {
-                            $Value = [long]$Value
-                        }
-                        return [DateTime]::FromFileTime($Value)
-                    }
-                    "GeneralizedTime" {
-                        # Handle YYYYMMDDHHMMSS.0Z format
-                        $dateString = $Value.ToString()
-                        if ($dateString -match '(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})') {
-                            return [DateTime]::ParseExact($Matches[0], "yyyyMMddHHmmss", $null)
-                        }
-                        return $null
-                    }
-                    default {
-                        return [DateTime]$Value
-                    }
-                }
-            }
-            catch {
-                return $null
-            }
-        }
-        
-        function Get-UACSummary {
-            param([int]$UACValue)
-            
-            # Basic UAC flags
-            $Flags = @{
-                ACCOUNTDISABLE = 0x0002
-                LOCKOUT = 0x0010
-                PASSWD_NOTREQD = 0x0020
-                NORMAL_ACCOUNT = 0x0200
-                DONT_EXPIRE_PASSWORD = 0x10000
-                SMARTCARD_REQUIRED = 0x40000
-                TRUSTED_FOR_DELEGATION = 0x80000
-                NOT_DELEGATED = 0x100000
-                USE_DES_KEY_ONLY = 0x200000
-                DONT_REQ_PREAUTH = 0x400000
-                PASSWORD_EXPIRED = 0x800000
-                TRUSTED_TO_AUTH_FOR_DELEGATION = 0x1000000
-            }
-            
-            $ActiveFlags = @()
-            foreach ($Flag in $Flags.GetEnumerator()) {
-                if ($UACValue -band $Flag.Value) {
-                    $ActiveFlags += $Flag.Key
-                }
-            }
-            
-            return @{
-                RawValue = $UACValue
-                Flags = $ActiveFlags
-                FlagsString = $ActiveFlags -join '; '
-                IsDisabled = ($UACValue -band 0x0002) -ne 0
-                IsLocked = ($UACValue -band 0x0010) -ne 0
-                PasswordNeverExpires = ($UACValue -band 0x10000) -ne 0
-                PasswordNotRequired = ($UACValue -band 0x0020) -ne 0
-                SmartCardRequired = ($UACValue -band 0x40000) -ne 0
-                TrustedForDelegation = ($UACValue -band 0x80000) -ne 0
-                TrustedForAuthDelegation = ($UACValue -band 0x1000000) -ne 0
-                DontRequirePreauth = ($UACValue -band 0x400000) -ne 0
-                IsNormalAccount = ($UACValue -band 0x0200) -ne 0
-                IsComputerAccount = ($UACValue -band 0x1000) -ne 0 -or ($UACValue -band 0x2000) -ne 0
-                PasswordExpired = ($UACValue -band 0x800000) -ne 0
-                NotDelegated = ($UACValue -band 0x100000) -ne 0
-                UseDESKeyOnly = ($UACValue -band 0x200000) -ne 0
-            }
-        }
-        
-        function Test-AccountType {
-            param(
-                [string]$SamAccountName,
-                [string]$Description,
-                [object]$UACAnalysis,
-                [int]$AdminCount = 0
-            )
-            
-            $ServiceIndicators = @("svc", "service", "app", "sql", "system", "iis")
-            $AdminIndicators = @("admin", "adm", "_a$", "-admin", ".admin")
-            
-            # Check for service account patterns
-            $IsServiceAccount = $false
-            foreach ($Pattern in $ServiceIndicators) {
-                if ($SamAccountName -match $Pattern -or $Description -match $Pattern) {
-                    $IsServiceAccount = $true
-                    break
-                }
-            }
-            
-            # Check for admin account patterns
-            $IsAdminAccount = $false
-            if ($AdminCount -eq 1) {
-                $IsAdminAccount = $true
-            }
-            else {
-                foreach ($Pattern in $AdminIndicators) {
-                    if ($SamAccountName -match $Pattern) {
-                        $IsAdminAccount = $true
-                        break
-                    }
-                }
-            }
-            
-            # Determine account type
-            if ($UACAnalysis.IsComputerAccount) {
-                return "Computer Account"
-            }
-            elseif ($IsServiceAccount) {
-                return "Service Account"
-            }
-            elseif ($IsAdminAccount) {
-                return "Admin Account"
-            }
-            elseif ($UACAnalysis.IsNormalAccount) {
-                return "Standard User"
-            }
-            else {
-                return "Special Account"
-            }
-        }
-        
-        function Get-CorruptionLevel {
-            param([array]$Issues)
-            
-            if (!$Issues -or $Issues.Count -eq 0) { return "Clean" }
-            
-            $CriticalCount = ($Issues | Where-Object {$_.Severity -eq "Critical"}).Count
-            $HighCount = ($Issues | Where-Object {$_.Severity -eq "High"}).Count
-            $MediumCount = ($Issues | Where-Object {$_.Severity -eq "Medium"}).Count
-            $LowCount = ($Issues | Where-Object {$_.Severity -eq "Low"}).Count
-            
-            if ($CriticalCount -gt 0) { return "Critical" }
-            elseif ($HighCount -gt 0) { return "High" }
-            elseif ($MediumCount -gt 0) { return "Medium" }
-            elseif ($LowCount -gt 0) { return "Low" }
-            else { return "Clean" }
-        }
-        
-        function Get-ETA {
-            param(
-                [int]$Current,
-                [int]$Total,
-                [datetime]$StartTime
-            )
-            
-            if ($Current -eq 0) { return "Calculating..." }
-            
-            $ElapsedTime = (Get-Date) - $StartTime
-            $ItemsPerSecond = $Current / $ElapsedTime.TotalSeconds
-            $RemainingItems = $Total - $Current
-            $EstimatedSeconds = $RemainingItems / $ItemsPerSecond
-            
-            if ($EstimatedSeconds -gt 3600) {
-                return "{0:N1} hours" -f ($EstimatedSeconds / 3600)
-            } elseif ($EstimatedSeconds -gt 60) {
-                return "{0:N0} minutes" -f ($EstimatedSeconds / 60)
-            } else {
-                return "{0:N0} seconds" -f $EstimatedSeconds
-            }
-        }
-        
-        function Write-Log {
-            param($Message)
-            $LogMessage = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - $Message"
-            if ($Global:LogFile) {
-                $LogMessage | Out-File -FilePath $Global:LogFile -Append
-            }
-            Write-Host $LogMessage
-        }
-        
-        # Set up minimal global configuration
-        $Global:Config = @{
-            InactiveUserDays = 90
-            InactiveComputerDays = 90
-            StalePasswordDays = 180
-            BatchSize = 100
-            ProgressUpdateInterval = 10
-            CircularGroupDepthLimit = 20
-            
-            MediumRiskThresholds = @{
-                ExcessiveBadPasswordCount = 100
-            }
-            
-            OutputSettings = @{
-                ExportBatchSize = 1000
-                PowerBIOptimized = $true
-            }
-            
-            SecuritySettings = @{
-                ServiceAccountIdentifiers = @("svc", "service", "app", "sql", "system", "iis")
-                AdminAccountIdentifiers = @("admin", "adm", "_a$", "-admin", ".admin")
-            }
-        }
-        
-        # Set up global variables
-        $Global:OutputPath = $OutputPath
-        $Global:StartTime = Get-Date
-        
-        # Create output directory
-        if (!(Test-Path $Global:OutputPath)) {
-            New-Item -ItemType Directory -Path $Global:OutputPath -Force | Out-Null
-        }
-        
-        # Create log file
-        $Global:LogFile = "$Global:OutputPath\AD_Assessment_Log_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
-        
-        Write-Host "Using embedded configuration with defaults" -ForegroundColor Yellow
+# TRY TO LOAD CORE SCRIPT FIRST
+$CoreScript = Join-Path (Split-Path $MyInvocation.MyCommand.Path) "00-AD-Assessment-Core.ps1"
+$CoreLoaded = $false
+
+if (Test-Path $CoreScript) {
+    try {
+        . $CoreScript -OutputPath $OutputPath -ConfigFile $ConfigFile
+        $CoreLoaded = $true
+        Write-Host "Core infrastructure loaded successfully" -ForegroundColor Green
+    } catch {
+        Write-Warning "Failed to load core script: $($_.Exception.Message)"
     }
 }
 
+# DEFINE FALLBACK FUNCTIONS AT SCRIPT LEVEL IF CORE DIDN'T LOAD
+if (-not $CoreLoaded) {
+    Write-Host "Using embedded core functions..." -ForegroundColor Yellow
+    
+    function Get-ADSIDomainInfo {
+        try {
+            $RootDSE = [ADSI]"LDAP://RootDSE"
+            $DomainDN = $RootDSE.defaultNamingContext[0]
+            $Domain = [ADSI]"LDAP://$DomainDN"
+            
+            return @{
+                DomainDN = $DomainDN
+                DomainName = $Domain.name[0]
+                DistinguishedName = $DomainDN
+            }
+        }
+        catch {
+            Write-Warning "Failed to get domain info via ADSI: $($_.Exception.Message)"
+            return $null
+        }
+    }
+    
+    function ConvertTo-DateTime {
+        param(
+            [object]$Value,
+            [string]$Format = "FileTime"
+        )
+        
+        try {
+            if (!$Value -or $Value -eq 0 -or $Value -eq "0") {
+                return $null
+            }
+            
+            switch ($Format) {
+                "FileTime" {
+                    if ($Value -is [string]) {
+                        $Value = [long]$Value
+                    }
+                    return [DateTime]::FromFileTime($Value)
+                }
+                "GeneralizedTime" {
+                    # Handle YYYYMMDDHHMMSS.0Z format
+                    $dateString = $Value.ToString()
+                    if ($dateString -match '(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})') {
+                        return [DateTime]::ParseExact($Matches[0], "yyyyMMddHHmmss", $null)
+                    }
+                    return $null
+                }
+                default {
+                    return [DateTime]$Value
+                }
+            }
+        }
+        catch {
+            return $null
+        }
+    }
+    
+    function Get-UACSummary {
+        param([int]$UACValue)
+        
+        # Basic UAC flags
+        $Flags = @{
+            ACCOUNTDISABLE = 0x0002
+            LOCKOUT = 0x0010
+            PASSWD_NOTREQD = 0x0020
+            NORMAL_ACCOUNT = 0x0200
+            WORKSTATION_TRUST_ACCOUNT = 0x1000
+            SERVER_TRUST_ACCOUNT = 0x2000
+            DONT_EXPIRE_PASSWORD = 0x10000
+            SMARTCARD_REQUIRED = 0x40000
+            TRUSTED_FOR_DELEGATION = 0x80000
+            NOT_DELEGATED = 0x100000
+            USE_DES_KEY_ONLY = 0x200000
+            DONT_REQ_PREAUTH = 0x400000
+            PASSWORD_EXPIRED = 0x800000
+            TRUSTED_TO_AUTH_FOR_DELEGATION = 0x1000000
+        }
+        
+        $ActiveFlags = @()
+        foreach ($Flag in $Flags.GetEnumerator()) {
+            if ($UACValue -band $Flag.Value) {
+                $ActiveFlags += $Flag.Key
+            }
+        }
+        
+        return @{
+            RawValue = $UACValue
+            Flags = $ActiveFlags
+            FlagsString = $ActiveFlags -join '; '
+            IsDisabled = ($UACValue -band 0x0002) -ne 0
+            IsLocked = ($UACValue -band 0x0010) -ne 0
+            PasswordNeverExpires = ($UACValue -band 0x10000) -ne 0
+            PasswordNotRequired = ($UACValue -band 0x0020) -ne 0
+            SmartCardRequired = ($UACValue -band 0x40000) -ne 0
+            TrustedForDelegation = ($UACValue -band 0x80000) -ne 0
+            TrustedForAuthDelegation = ($UACValue -band 0x1000000) -ne 0
+            DontRequirePreauth = ($UACValue -band 0x400000) -ne 0
+            IsNormalAccount = ($UACValue -band 0x0200) -ne 0
+            IsComputerAccount = ($UACValue -band 0x1000) -ne 0 -or ($UACValue -band 0x2000) -ne 0
+            PasswordExpired = ($UACValue -band 0x800000) -ne 0
+            NotDelegated = ($UACValue -band 0x100000) -ne 0
+            UseDESKeyOnly = ($UACValue -band 0x200000) -ne 0
+        }
+    }
+    
+    function Test-AccountType {
+        param(
+            [string]$SamAccountName,
+            [string]$Description,
+            [object]$UACAnalysis,
+            [int]$AdminCount = 0
+        )
+        
+        $ServiceIndicators = @("svc", "service", "app", "sql", "system", "iis")
+        $AdminIndicators = @("admin", "adm", "_a$", "-admin", ".admin")
+        
+        # Check for service account patterns
+        $IsServiceAccount = $false
+        foreach ($Pattern in $ServiceIndicators) {
+            if ($SamAccountName -match $Pattern -or $Description -match $Pattern) {
+                $IsServiceAccount = $true
+                break
+            }
+        }
+        
+        # Check for admin account patterns
+        $IsAdminAccount = $false
+        if ($AdminCount -eq 1) {
+            $IsAdminAccount = $true
+        }
+        else {
+            foreach ($Pattern in $AdminIndicators) {
+                if ($SamAccountName -match $Pattern) {
+                    $IsAdminAccount = $true
+                    break
+                }
+            }
+        }
+        
+        # Determine account type
+        if ($UACAnalysis.IsComputerAccount) {
+            return "Computer Account"
+        }
+        elseif ($IsServiceAccount) {
+            return "Service Account"
+        }
+        elseif ($IsAdminAccount) {
+            return "Admin Account"
+        }
+        elseif ($UACAnalysis.IsNormalAccount) {
+            return "Standard User"
+        }
+        else {
+            return "Special Account"
+        }
+    }
+    
+    function Get-CorruptionLevel {
+        param([array]$Issues)
+        
+        if (!$Issues -or $Issues.Count -eq 0) { return "Clean" }
+        
+        $CriticalCount = ($Issues | Where-Object {$_.Severity -eq "Critical"}).Count
+        $HighCount = ($Issues | Where-Object {$_.Severity -eq "High"}).Count
+        $MediumCount = ($Issues | Where-Object {$_.Severity -eq "Medium"}).Count
+        $LowCount = ($Issues | Where-Object {$_.Severity -eq "Low"}).Count
+        
+        if ($CriticalCount -gt 0) { return "Critical" }
+        elseif ($HighCount -gt 0) { return "High" }
+        elseif ($MediumCount -gt 0) { return "Medium" }
+        elseif ($LowCount -gt 0) { return "Low" }
+        else { return "Clean" }
+    }
+    
+    function Get-ETA {
+        param(
+            [int]$Current,
+            [int]$Total,
+            [datetime]$StartTime
+        )
+        
+        if ($Current -eq 0) { return "Calculating..." }
+        
+        $ElapsedTime = (Get-Date) - $StartTime
+        $ItemsPerSecond = $Current / $ElapsedTime.TotalSeconds
+        $RemainingItems = $Total - $Current
+        $EstimatedSeconds = $RemainingItems / $ItemsPerSecond
+        
+        if ($EstimatedSeconds -gt 3600) {
+            return "{0:N1} hours" -f ($EstimatedSeconds / 3600)
+        } elseif ($EstimatedSeconds -gt 60) {
+            return "{0:N0} minutes" -f ($EstimatedSeconds / 60)
+        } else {
+            return "{0:N0} seconds" -f $EstimatedSeconds
+        }
+    }
+    
+    function Write-Log {
+        param($Message)
+        $LogMessage = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - $Message"
+        if ($Global:LogFile) {
+            $LogMessage | Out-File -FilePath $Global:LogFile -Append -ErrorAction SilentlyContinue
+        }
+        Write-Host $LogMessage
+    }
+    
+    # Set up minimal global configuration
+    $Global:Config = @{
+        InactiveUserDays = 90
+        InactiveComputerDays = 90
+        StalePasswordDays = 180
+        BatchSize = 100
+        ProgressUpdateInterval = 10
+        CircularGroupDepthLimit = 20
+        
+        MediumRiskThresholds = @{
+            ExcessiveBadPasswordCount = 100
+        }
+        
+        OutputSettings = @{
+            ExportBatchSize = 1000
+            PowerBIOptimized = $true
+        }
+        
+        SecuritySettings = @{
+            ServiceAccountIdentifiers = @("svc", "service", "app", "sql", "system", "iis")
+            AdminAccountIdentifiers = @("admin", "adm", "_a$", "-admin", ".admin")
+        }
+    }
+    
+    # Set up global variables
+    $Global:OutputPath = $OutputPath
+    $Global:StartTime = Get-Date
+    
+    # Create output directory
+    if (!(Test-Path $Global:OutputPath)) {
+        New-Item -ItemType Directory -Path $Global:OutputPath -Force | Out-Null
+    }
+    
+    # Create log file
+    $Global:LogFile = "$Global:OutputPath\AD_Assessment_Log_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
+    
+    Write-Host "Using embedded configuration with defaults" -ForegroundColor Yellow
+}
+
+# MAIN ASSESSMENT FUNCTION - Now all functions are available at script level
 function Get-ADUsersAssessmentEnhanced {
     Write-Log "=== Starting Enhanced AD Users Assessment with ADUAC Enumeration (ADSI) ==="
     
@@ -742,8 +742,6 @@ function Get-ADUsersAssessmentEnhanced {
     }
 }
 
-# Execute the assessment if script is run directly
-if ($MyInvocation.InvocationName -ne '.') {
-    Get-ADUsersAssessmentEnhanced
-    Write-Host "Enhanced Users Assessment completed. Results in: $Global:OutputPath" -ForegroundColor Green
-}
+# Execute the assessment
+Get-ADUsersAssessmentEnhanced
+Write-Host "Enhanced Users Assessment completed. Results in: $Global:OutputPath" -ForegroundColor Green
