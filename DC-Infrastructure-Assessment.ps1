@@ -1,4 +1,4 @@
-# Domain Controllers and Infrastructure Assessment - Final Version
+# Domain Controllers and Infrastructure Assessment - Fixed Version
 # Version 5.3 - Optimized for som.ucsf.edu domain assessment
 
 #Requires -Version 5.1
@@ -100,7 +100,7 @@ function Get-DCInfrastructureAssessment {
         }
         
         $ForestInfo | Export-Csv "$Global:OutputPath\Infrastructure_Forest_Information.csv" -NoTypeInformation
-        Write-Host "✓ Forest information exported" -ForegroundColor Green
+        Write-Host "  Forest information exported" -ForegroundColor Green
         
         # 2. Get som.ucsf.edu Domain Controllers
         Write-Host "`nAnalyzing som.ucsf.edu Domain Controllers..." -ForegroundColor Yellow
@@ -167,7 +167,8 @@ function Get-DCInfrastructureAssessment {
                     $Site = $Matches[1]
                 }
                 
-                Write-Host "    - $DCName (Site: $Site, Type: $(if ($IsReadOnly) { 'RODC' } elseif ($IsGlobalCatalog) { 'GC' } else { 'DC' }))" -ForegroundColor Gray
+                $DCType = if ($IsReadOnly) { "RODC" } elseif ($IsGlobalCatalog) { "GC" } else { "DC" }
+                Write-Host "    - $DCName (Site: $Site, Type: $DCType)" -ForegroundColor Gray
                 
                 $DCDetails += [PSCustomObject]@{
                     DCName = $DCName
@@ -176,7 +177,7 @@ function Get-DCInfrastructureAssessment {
                     Site = $Site
                     IsGlobalCatalog = $IsGlobalCatalog
                     IsReadOnly = $IsReadOnly
-                    DCType = if ($IsReadOnly) { "RODC" } elseif ($IsGlobalCatalog) { "GC" } else { "DC" }
+                    DCType = $DCType
                     OperatingSystem = if ($DCProps['operatingsystem']) { $DCProps['operatingsystem'][0] } else { "Unknown" }
                     OperatingSystemVersion = if ($DCProps['operatingsystemversion']) { $DCProps['operatingsystemversion'][0] } else { "Unknown" }
                     Description = if ($DCProps['description']) { $DCProps['description'][0] } else { "" }
@@ -195,7 +196,7 @@ function Get-DCInfrastructureAssessment {
         $DCSearcher.Dispose()
         
         $DCDetails | Export-Csv "$Global:OutputPath\Infrastructure_Domain_Controllers.csv" -NoTypeInformation
-        Write-Host "✓ Domain Controllers exported" -ForegroundColor Green
+        Write-Host "  Domain Controllers exported" -ForegroundColor Green
         
         # 3. Get Forest-wide Sites
         Write-Host "`nGetting Active Directory Sites (Forest-wide)..." -ForegroundColor Yellow
@@ -248,7 +249,7 @@ function Get-DCInfrastructureAssessment {
         $SitesSearcher.Dispose()
         
         $SiteDetails | Export-Csv "$Global:OutputPath\Infrastructure_AD_Sites.csv" -NoTypeInformation
-        Write-Host "✓ Sites information exported" -ForegroundColor Green
+        Write-Host "  Sites information exported" -ForegroundColor Green
         
         # 4. Trust Relationships for som.ucsf.edu
         Write-Host "`nGetting Trust Relationships for som.ucsf.edu..." -ForegroundColor Yellow
@@ -305,7 +306,7 @@ function Get-DCInfrastructureAssessment {
         $TrustSearcher.Dispose()
         
         $TrustDetails | Export-Csv "$Global:OutputPath\Infrastructure_Trust_Relationships.csv" -NoTypeInformation
-        Write-Host "✓ Trust relationships exported" -ForegroundColor Green
+        Write-Host "  Trust relationships exported" -ForegroundColor Green
         
         # 5. Generate Summary specifically for som.ucsf.edu
         $InfraStats = [PSCustomObject]@{
@@ -340,7 +341,7 @@ function Get-DCInfrastructureAssessment {
         }
         
         $InfraStats | Export-Csv "$Global:OutputPath\Infrastructure_Summary_Stats.csv" -NoTypeInformation
-        Write-Host "✓ Summary statistics exported" -ForegroundColor Green
+        Write-Host "  Summary statistics exported" -ForegroundColor Green
         
         Write-Host "`n=== Assessment Summary for som.ucsf.edu ===" -ForegroundColor Cyan
         Write-Host "Domain Controllers: $($DCDetails.Count) (GCs: $($InfraStats.GlobalCatalogs), RODCs: $($InfraStats.ReadOnlyDCs))" -ForegroundColor White
