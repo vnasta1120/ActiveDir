@@ -13,7 +13,7 @@ param(
 )
 
 # Dot source the core infrastructure if not already loaded
-if (-not $Global:Config) {
+if ($true) {
     $CoreScript = Join-Path (Split-Path $MyInvocation.MyCommand.Path) "00-AD-Assessment-Core.ps1"
     if (Test-Path $CoreScript) {
         # Build parameters hash table for splatting
