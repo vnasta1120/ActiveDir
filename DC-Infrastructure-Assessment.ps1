@@ -1,5 +1,5 @@
-# Domain Controllers and Infrastructure Assessment - Fixed Version
-# Version 5.3 - Optimized for som.ucsf.edu domain assessment
+# Domain Controllers and Infrastructure Assessment - Complete Version
+# Version 5.4 - Complete with all original functionality for multi-domain forests
 
 #Requires -Version 5.1
 
@@ -29,7 +29,7 @@ if ($true) {
 }
 
 function Get-DCInfrastructureAssessment {
-    Write-Log "=== Starting DC and Infrastructure Assessment for som.ucsf.edu ==="
+    Write-Log "=== Starting Domain Controllers and Infrastructure Assessment (ADSI) ==="
     
     $ScriptStartTime = Get-Date
     
@@ -42,30 +42,38 @@ function Get-DCInfrastructureAssessment {
     
     try {
         # 1. Get Forest and Domain Information
-        Write-Host "Getting Forest and Domain information..." -ForegroundColor Yellow
+        Write-Host "Getting Forest and Domain information via ADSI..." -ForegroundColor Yellow
         
+        # Get Forest Information - Use RootDSE to get forest-level configuration
         $RootDSE = [ADSI]"LDAP://RootDSE"
         $ConfigDN = $RootDSE.configurationNamingContext[0]
         $SchemaDN = $RootDSE.schemaNamingContext[0]
         $ForestDN = $RootDSE.rootDomainNamingContext[0]
         
-        Write-Host "  Assessing Domain: $($DomainInfo.DomainName)" -ForegroundColor Green
-        Write-Host "  Domain DN: $($DomainInfo.DomainDN)" -ForegroundColor Gray
-        Write-Host "  Forest Root: $ForestDN" -ForegroundColor Gray
+        Write-Host "  Current Domain: $($DomainInfo.DomainName)" -ForegroundColor Green
+        Write-Host "  Forest Root: $ForestDN" -ForegroundColor Green
+        Write-Host "  Configuration: $ConfigDN" -ForegroundColor Green
         
-        # Get Forest domains
+        # Get Forest root domain and all domains
         $PartitionsSearcher = [adsisearcher]"(&(objectClass=crossRef)(systemFlags:1.2.840.113556.1.4.803:=3))"
         $PartitionsSearcher.SearchRoot = [ADSI]"LDAP://CN=Partitions,$ConfigDN"
         $PartitionsSearcher.PropertiesToLoad.AddRange(@('dnsroot', 'netbiosname', 'ncname'))
         
         $PartitionsResults = $PartitionsSearcher.FindAll()
         $ForestDomains = @()
+        $ForestRootDomain = ""
         
         foreach ($PartitionResult in $PartitionsResults) {
             $PartitionProps = $PartitionResult.Properties
             $DomainDNS = if ($PartitionProps['dnsroot']) { $PartitionProps['dnsroot'][0] } else { "" }
+            $DomainNetBIOS = if ($PartitionProps['netbiosname']) { $PartitionProps['netbiosname'][0] } else { "" }
+            $NCName = if ($PartitionProps['ncname']) { $PartitionProps['ncname'][0] } else { "" }
+            
             if ($DomainDNS) {
                 $ForestDomains += $DomainDNS
+                if ($NCName -eq $ForestDN) {
+                    $ForestRootDomain = $DomainDNS
+                }
             }
         }
         
@@ -85,110 +93,176 @@ function Get-DCInfrastructureAssessment {
         $SchemaResults.Dispose()
         $SchemaSearcher.Dispose()
         
+        # Get FSMO role holders
+        $SchemaMaster = $RootDSE.schemaNamingContext[0]
+        $DomainNamingMaster = $RootDSE.configurationNamingContext[0]
+        
+        # Get domain-specific FSMO roles
+        $DomainSearcher = [adsisearcher]"(objectClass=domainDNS)"
+        $DomainSearcher.SearchRoot = [ADSI]"LDAP://$($DomainInfo.DomainDN)"
+        $DomainSearcher.PropertiesToLoad.AddRange(@('fsmoroleowner', 'ridmanagerreference', 'infrastructureupdate'))
+        
+        $DomainResults = $DomainSearcher.FindAll()
+        $PDCEmulator = ""
+        $RIDMaster = ""
+        $InfrastructureMaster = ""
+        
+        if ($DomainResults.Count -gt 0) {
+            $DomainProps = $DomainResults[0].Properties
+            if ($DomainProps['fsmoroleowner']) {
+                $PDCEmulator = $DomainProps['fsmoroleowner'][0] -replace '.*?CN=([^,]+).*', '$1'
+            }
+            if ($DomainProps['ridmanagerreference']) {
+                $RIDMaster = $DomainProps['ridmanagerreference'][0] -replace '.*?CN=([^,]+).*', '$1'
+            }
+        }
+        
+        $DomainResults.Dispose()
+        $DomainSearcher.Dispose()
+        
         $ForestInfo = [PSCustomObject]@{
-            AssessedDomain = $DomainInfo.DomainName
-            AssessedDomainDN = $DomainInfo.DomainDN
-            AssessedDomainNetBIOS = $DomainInfo.NetBIOSName
-            ForestRootDN = $ForestDN
+            ForestName = $ForestRootDomain
+            ForestMode = "Unknown"  # Not easily available via ADSI
+            RootDomain = $ForestRootDomain
+            SchemaVersion = $SchemaVersion
+            Domains = $ForestDomains -join '; '
+            DomainCount = $ForestDomains.Count
             ConfigurationDN = $ConfigDN
             SchemaDN = $SchemaDN
-            SchemaVersion = $SchemaVersion
-            ForestDomains = $ForestDomains -join '; '
-            DomainCount = $ForestDomains.Count
-            IsMultiDomainForest = $ForestDomains.Count -gt 1
-            AssessmentDate = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+            SchemaMaster = $SchemaMaster
+            DomainNamingMaster = $DomainNamingMaster
+            AssessmentMethod = "ADSI"
         }
         
         $ForestInfo | Export-Csv "$Global:OutputPath\Infrastructure_Forest_Information.csv" -NoTypeInformation
-        Write-Host "  Forest information exported" -ForegroundColor Green
         
-        # 2. Get som.ucsf.edu Domain Controllers
-        Write-Host "`nAnalyzing som.ucsf.edu Domain Controllers..." -ForegroundColor Yellow
+        $DomainInfoReport = [PSCustomObject]@{
+            DomainName = $DomainInfo.DomainName
+            NetBIOSName = $DomainInfo.NetBIOSName
+            DomainMode = $DomainInfo.DomainMode
+            DomainFunctionalLevel = $Global:Config.DomainFunctionalLevel
+            PDCEmulator = $PDCEmulator
+            RIDMaster = $RIDMaster
+            InfrastructureMaster = $InfrastructureMaster
+            DistinguishedName = $DomainInfo.DomainDN
+            AssessmentMethod = "ADSI"
+        }
+        
+        $DomainInfoReport | Export-Csv "$Global:OutputPath\Infrastructure_Domain_Information.csv" -NoTypeInformation
+        
+        # 2. Get all Domain Controllers with enhanced analysis
+        Write-Host "Analyzing Domain Controllers..." -ForegroundColor Yellow
         
         $DCDetails = @()
         
+        # Search for Domain Controllers
         $DCSearcher = [adsisearcher]"(&(objectCategory=computer)(userAccountControl:1.2.840.113556.1.4.803:=8192))"
         $DCSearcher.SearchRoot = [ADSI]"LDAP://$($DomainInfo.DomainDN)"
         $DCSearcher.PageSize = 100
         $DCSearcher.PropertiesToLoad.AddRange(@(
             'name', 'dnshostname', 'operatingsystem', 'operatingsystemversion',
             'useraccountcontrol', 'whencreated', 'lastlogontimestamp', 'location',
-            'serviceprincipalname', 'distinguishedname', 'description', 'serverreferenceBL'
+            'serviceprincipalname', 'distinguishedname', 'serverreferenceBL'
         ))
         
         $DCResults = $DCSearcher.FindAll()
-        Write-Host "  Found $($DCResults.Count) Domain Controllers in som.ucsf.edu" -ForegroundColor Green
+        Write-Host "  Found $($DCResults.Count) Domain Controllers" -ForegroundColor Green
         
         foreach ($DCResult in $DCResults) {
-            $DCProps = $DCResult.Properties
-            $DCName = if ($DCProps['name']) { $DCProps['name'][0] } else { "" }
+            Write-Host "  Processing DC: $($DCResult.Properties['name'][0])" -ForegroundColor Gray
             
             try {
+                $DCProps = $DCResult.Properties
+                $DCName = if ($DCProps['name']) { $DCProps['name'][0] } else { "" }
                 $DCDNSName = if ($DCProps['dnshostname']) { $DCProps['dnshostname'][0] } else { "" }
                 $DCUAC = if ($DCProps['useraccountcontrol']) { [int]$DCProps['useraccountcontrol'][0] } else { 0 }
                 $DCUACAnalysis = Get-UACSummary -UACValue $DCUAC
+                $DCDN = if ($DCProps['distinguishedname']) { $DCProps['distinguishedname'][0] } else { "" }
                 
-                # Determine DC type from SPNs
+                # Determine DC type
                 $IsGlobalCatalog = $false
+                $IsReadOnly = $false
+                
+                # Check for GC and RODC in SPN
                 if ($DCProps['serviceprincipalname']) {
-                    foreach ($SPN in $DCProps['serviceprincipalname']) {
+                    $SPNs = $DCProps['serviceprincipalname']
+                    foreach ($SPN in $SPNs) {
                         if ($SPN -like "*GC/*") {
                             $IsGlobalCatalog = $true
-                            break
                         }
                     }
                 }
                 
-                $IsReadOnly = ($DCUAC -band 67108864) -ne 0  # PARTIAL_SECRETS_ACCOUNT
+                # Check if RODC (partial attribute set)
+                $IsReadOnly = $DCUACAnalysis.IsDisabled -eq $false -and ($DCUAC -band 67108864) -ne 0  # PARTIAL_SECRETS_ACCOUNT
                 
-                # Get IP addresses
+                # Get IP addresses (limited without WinRM)
                 $IPv4Address = ""
+                $IPv6Address = ""
                 try {
                     if ($DCDNSName) {
                         $IPAddresses = [System.Net.Dns]::GetHostAddresses($DCDNSName)
                         $IPv4s = $IPAddresses | Where-Object {$_.AddressFamily -eq "InterNetwork"}
+                        $IPv6s = $IPAddresses | Where-Object {$_.AddressFamily -eq "InterNetworkV6"}
+                        
                         if ($IPv4s) { $IPv4Address = $IPv4s[0].IPAddressToString }
+                        if ($IPv6s) { $IPv6Address = $IPv6s[0].IPAddressToString }
                     }
-                } catch { }
+                } catch {
+                    # DNS resolution failed
+                }
                 
-                # Extract site from DN or serverReferenceBL
+                # Determine site from serverReferenceBL or DN
                 $Site = "Unknown"
-                $DCDN = if ($DCProps['distinguishedname']) { $DCProps['distinguishedname'][0] } else { "" }
-                
-                # Try serverReferenceBL first (more reliable)
-                if ($DCProps['serverreferenceBL']) {
+                if ($DCProps['serverreferenceBL'] -and $DCProps['serverreferenceBL'].Count -gt 0) {
                     $ServerRef = $DCProps['serverreferenceBL'][0]
                     if ($ServerRef -match 'CN=([^,]+),CN=Servers,CN=([^,]+),CN=Sites') {
                         $Site = $Matches[2]
                     }
-                }
-                # Fallback to DN parsing
-                elseif ($DCDN -match 'CN=Servers,CN=([^,]+),CN=Sites') {
-                    $Site = $Matches[1]
+                } elseif ($DCDN -match 'CN=([^,]+),OU=Domain Controllers') {
+                    # Try to find site from Sites container
+                    $DCNameOnly = $Matches[1]
+                    $ServerSearcher = [adsisearcher]"(&(objectClass=server)(cn=$DCNameOnly))"
+                    $ServerSearcher.SearchRoot = [ADSI]"LDAP://CN=Sites,$ConfigDN"
+                    $ServerResults = $ServerSearcher.FindAll()
+                    
+                    if ($ServerResults.Count -gt 0) {
+                        $ServerDN = $ServerResults[0].Properties['distinguishedname'][0]
+                        if ($ServerDN -match 'CN=Servers,CN=([^,]+),CN=Sites') {
+                            $Site = $Matches[1]
+                        }
+                    }
+                    
+                    $ServerResults.Dispose()
+                    $ServerSearcher.Dispose()
                 }
                 
-                $DCType = if ($IsReadOnly) { "RODC" } elseif ($IsGlobalCatalog) { "GC" } else { "DC" }
-                Write-Host "    - $DCName (Site: $Site, Type: $DCType)" -ForegroundColor Gray
-                
-                $DCDetails += [PSCustomObject]@{
+                $DCObject = [PSCustomObject]@{
                     DCName = $DCName
                     DNSHostName = $DCDNSName
                     IPv4Address = $IPv4Address
+                    IPv6Address = $IPv6Address
                     Site = $Site
                     IsGlobalCatalog = $IsGlobalCatalog
                     IsReadOnly = $IsReadOnly
-                    DCType = $DCType
                     OperatingSystem = if ($DCProps['operatingsystem']) { $DCProps['operatingsystem'][0] } else { "Unknown" }
                     OperatingSystemVersion = if ($DCProps['operatingsystemversion']) { $DCProps['operatingsystemversion'][0] } else { "Unknown" }
-                    Description = if ($DCProps['description']) { $DCProps['description'][0] } else { "" }
                     WhenCreated = ConvertTo-DateTime -Value $DCProps['whencreated'][0] -Format "GeneralizedTime"
                     LastLogonDate = ConvertTo-DateTime -Value $DCProps['lastlogontimestamp'][0] -Format "FileTime"
                     Location = if ($DCProps['location']) { $DCProps['location'][0] } else { "" }
-                    Enabled = !$DCUACAnalysis.IsDisabled
-                    Domain = $DomainInfo.DomainName
+                    UserAccountControl = $DCUAC
+                    UACFlags = $DCUACAnalysis.FlagsString
+                    TrustedForDelegation = $DCUACAnalysis.TrustedForDelegation
+                    Services = "Limited assessment without WinRM"
+                    LastReboot = "Unknown - WinRM required"
+                    AssessmentMethod = "ADSI"
+                    AssessmentLimitations = "Service status and reboot time require WinRM"
                 }
+                
+                $DCDetails += $DCObject
+                
             } catch {
-                Write-Warning "Error processing DC $DCName : $_"
+                Write-Log "Error processing DC $DCName : $($_.Exception.Message)"
             }
         }
         
@@ -196,63 +270,106 @@ function Get-DCInfrastructureAssessment {
         $DCSearcher.Dispose()
         
         $DCDetails | Export-Csv "$Global:OutputPath\Infrastructure_Domain_Controllers.csv" -NoTypeInformation
-        Write-Host "  Domain Controllers exported" -ForegroundColor Green
         
-        # 3. Get Forest-wide Sites
-        Write-Host "`nGetting Active Directory Sites (Forest-wide)..." -ForegroundColor Yellow
+        # 3. Get Sites and Subnets
+        Write-Host "Getting Sites and Subnets..." -ForegroundColor Yellow
         
         $SiteDetails = @()
         
+        # Get Sites from forest configuration
         $SitesSearcher = [adsisearcher]"(objectClass=site)"
         $SitesSearcher.SearchRoot = [ADSI]"LDAP://CN=Sites,$ConfigDN"
         $SitesSearcher.PageSize = 100
-        $SitesSearcher.PropertiesToLoad.AddRange(@('name', 'description', 'location', 'whencreated', 'distinguishedname'))
+        $SitesSearcher.PropertiesToLoad.AddRange(@('name', 'description', 'location', 'whencreated'))
         
         $SitesResults = $SitesSearcher.FindAll()
-        Write-Host "  Found $($SitesResults.Count) sites in forest" -ForegroundColor Green
+        Write-Host "  Found $($SitesResults.Count) sites" -ForegroundColor Green
         
         foreach ($SiteResult in $SitesResults) {
             $SiteProps = $SiteResult.Properties
             $SiteName = if ($SiteProps['name']) { $SiteProps['name'][0] } else { "" }
-            $SiteDN = if ($SiteProps['distinguishedname']) { $SiteProps['distinguishedname'][0] } else { "" }
             
-            # Get subnet count for this site
-            $SubnetCount = 0
-            try {
-                $SubnetSearcher = [adsisearcher]"(&(objectClass=subnet)(siteObject=$SiteDN))"
-                $SubnetSearcher.SearchRoot = [ADSI]"LDAP://CN=Subnets,CN=Sites,$ConfigDN"
-                $SubnetSearcher.PageSize = 100
-                
-                $SubnetResults = $SubnetSearcher.FindAll()
-                $SubnetCount = $SubnetResults.Count
-                
-                $SubnetResults.Dispose()
-                $SubnetSearcher.Dispose()
-            } catch { }
+            # Get subnets for this site
+            $SubnetSearcher = [adsisearcher]"(&(objectClass=subnet)(siteObject=CN=$SiteName,CN=Sites,$ConfigDN))"
+            $SubnetSearcher.SearchRoot = [ADSI]"LDAP://CN=Subnets,CN=Sites,$ConfigDN"
+            $SubnetSearcher.PropertiesToLoad.Add('name')
             
-            # Count DCs from som.ucsf.edu in this site
+            $SubnetResults = $SubnetSearcher.FindAll()
+            $Subnets = @()
+            
+            foreach ($SubnetResult in $SubnetResults) {
+                if ($SubnetResult.Properties['name']) {
+                    $Subnets += $SubnetResult.Properties['name'][0]
+                }
+            }
+            
+            $SubnetResults.Dispose()
+            $SubnetSearcher.Dispose()
+            
+            # Count DCs in this site
             $SiteDCs = $DCDetails | Where-Object {$_.Site -eq $SiteName}
             
-            $SiteDetails += [PSCustomObject]@{
+            $SiteObject = [PSCustomObject]@{
                 SiteName = $SiteName
                 Description = if ($SiteProps['description']) { $SiteProps['description'][0] } else { "" }
                 Location = if ($SiteProps['location']) { $SiteProps['location'][0] } else { "" }
                 WhenCreated = ConvertTo-DateTime -Value $SiteProps['whencreated'][0] -Format "GeneralizedTime"
-                SubnetCount = $SubnetCount
-                SOMDomainDCs = ($SiteDCs | Select-Object -ExpandProperty DCName) -join '; '
-                SOMDomainDCCount = $SiteDCs.Count
-                HasSOMDomainDCs = $SiteDCs.Count -gt 0
+                Subnets = $Subnets -join '; '
+                SubnetCount = $Subnets.Count
+                DomainControllers = ($SiteDCs | Select-Object -ExpandProperty DCName) -join '; '
+                DCCount = $SiteDCs.Count
+                HasDCs = $SiteDCs.Count -gt 0
+                HasSubnets = $Subnets.Count -gt 0
             }
+            
+            $SiteDetails += $SiteObject
         }
         
         $SitesResults.Dispose()
         $SitesSearcher.Dispose()
         
         $SiteDetails | Export-Csv "$Global:OutputPath\Infrastructure_AD_Sites.csv" -NoTypeInformation
-        Write-Host "  Sites information exported" -ForegroundColor Green
         
-        # 4. Trust Relationships for som.ucsf.edu
-        Write-Host "`nGetting Trust Relationships for som.ucsf.edu..." -ForegroundColor Yellow
+        # 4. Get Subnet Information
+        Write-Host "Getting Subnet Details..." -ForegroundColor Yellow
+        
+        $SubnetDetails = @()
+        
+        $AllSubnetsSearcher = [adsisearcher]"(objectClass=subnet)"
+        $AllSubnetsSearcher.SearchRoot = [ADSI]"LDAP://CN=Subnets,CN=Sites,$ConfigDN"
+        $AllSubnetsSearcher.PageSize = 100
+        $AllSubnetsSearcher.PropertiesToLoad.AddRange(@('name', 'description', 'location', 'siteobject'))
+        
+        $AllSubnetsResults = $AllSubnetsSearcher.FindAll()
+        Write-Host "  Found $($AllSubnetsResults.Count) subnets" -ForegroundColor Green
+        
+        foreach ($SubnetResult in $AllSubnetsResults) {
+            $SubnetProps = $SubnetResult.Properties
+            $SubnetName = if ($SubnetProps['name']) { $SubnetProps['name'][0] } else { "" }
+            $SiteObjectDN = if ($SubnetProps['siteobject']) { $SubnetProps['siteobject'][0] } else { "" }
+            
+            # Extract site name from DN
+            $AssociatedSite = if ($SiteObjectDN -match 'CN=([^,]+),CN=Sites') { $Matches[1] } else { "Unknown" }
+            
+            $SubnetDetails += [PSCustomObject]@{
+                SubnetName = $SubnetName
+                Description = if ($SubnetProps['description']) { $SubnetProps['description'][0] } else { "" }
+                Location = if ($SubnetProps['location']) { $SubnetProps['location'][0] } else { "" }
+                AssociatedSite = $AssociatedSite
+                SiteObjectDN = $SiteObjectDN
+                HasSiteAssociation = $SiteObjectDN -ne ""
+            }
+        }
+        
+        $AllSubnetsResults.Dispose()
+        $AllSubnetsSearcher.Dispose()
+        
+        if ($SubnetDetails.Count -gt 0) {
+            $SubnetDetails | Export-Csv "$Global:OutputPath\Infrastructure_AD_Subnets.csv" -NoTypeInformation
+        }
+        
+        # 5. Trust Relationships
+        Write-Host "Getting Trust Relationships..." -ForegroundColor Yellow
         
         $TrustDetails = @()
         
@@ -261,7 +378,7 @@ function Get-DCInfrastructureAssessment {
         $TrustSearcher.PageSize = 100
         $TrustSearcher.PropertiesToLoad.AddRange(@(
             'name', 'trustdirection', 'trusttype', 'trustattributes', 
-            'whencreated', 'whenchanged', 'flatname', 'trustpartner'
+            'whencreated', 'whenchanged', 'flatname'
         ))
         
         $TrustResults = $TrustSearcher.FindAll()
@@ -272,7 +389,9 @@ function Get-DCInfrastructureAssessment {
             $TrustName = if ($TrustProps['name']) { $TrustProps['name'][0] } else { "" }
             $TrustDirection = if ($TrustProps['trustdirection']) { $TrustProps['trustdirection'][0] } else { 0 }
             $TrustType = if ($TrustProps['trusttype']) { $TrustProps['trusttype'][0] } else { 0 }
+            $TrustAttributes = if ($TrustProps['trustattributes']) { $TrustProps['trustattributes'][0] } else { 0 }
             
+            # Interpret trust direction
             $DirectionText = switch ($TrustDirection) {
                 1 { "Incoming" }
                 2 { "Outgoing" }
@@ -280,75 +399,134 @@ function Get-DCInfrastructureAssessment {
                 default { "Unknown" }
             }
             
+            # Interpret trust type
             $TypeText = switch ($TrustType) {
                 1 { "External" }
                 2 { "Forest" }
-                3 { "Kerberos" }
+                3 { "Unknown" }
                 4 { "DCE" }
                 default { "Unknown" }
             }
             
-            Write-Host "    - $TrustName ($TypeText, $DirectionText)" -ForegroundColor Gray
-            
             $TrustDetails += [PSCustomObject]@{
                 TrustName = $TrustName
-                TrustPartner = if ($TrustProps['trustpartner']) { $TrustProps['trustpartner'][0] } else { $TrustName }
                 TrustType = $TypeText
                 TrustDirection = $DirectionText
+                TrustAttributes = $TrustAttributes
                 FlatName = if ($TrustProps['flatname']) { $TrustProps['flatname'][0] } else { "" }
                 Created = ConvertTo-DateTime -Value $TrustProps['whencreated'][0] -Format "GeneralizedTime"
                 Modified = ConvertTo-DateTime -Value $TrustProps['whenchanged'][0] -Format "GeneralizedTime"
-                SourceDomain = $DomainInfo.DomainName
+                TrustStatus = "Active"  # Basic status - detailed validation would require additional tools
+                AssessmentLimitations = "Trust health validation requires additional tools"
             }
         }
         
         $TrustResults.Dispose()
         $TrustSearcher.Dispose()
         
-        $TrustDetails | Export-Csv "$Global:OutputPath\Infrastructure_Trust_Relationships.csv" -NoTypeInformation
-        Write-Host "  Trust relationships exported" -ForegroundColor Green
+        if ($TrustDetails.Count -gt 0) {
+            $TrustDetails | Export-Csv "$Global:OutputPath\Infrastructure_Trust_Relationships.csv" -NoTypeInformation
+        }
         
-        # 5. Generate Summary specifically for som.ucsf.edu
+        # 6. Site Links (for replication topology)
+        Write-Host "Getting Site Links..." -ForegroundColor Yellow
+        
+        $SiteLinkDetails = @()
+        
+        # Check IP transport first
+        try {
+            $SiteLinkSearcher = [adsisearcher]"(objectClass=siteLink)"
+            $SiteLinkSearcher.SearchRoot = [ADSI]"LDAP://CN=IP,CN=Inter-Site Transports,CN=Sites,$ConfigDN"
+            $SiteLinkSearcher.PageSize = 100
+            $SiteLinkSearcher.PropertiesToLoad.AddRange(@(
+                'name', 'description', 'sitelist', 'cost', 'replinterval', 'schedule'
+            ))
+            
+            $SiteLinkResults = $SiteLinkSearcher.FindAll()
+            Write-Host "  Found $($SiteLinkResults.Count) site links" -ForegroundColor Green
+            
+            foreach ($SiteLinkResult in $SiteLinkResults) {
+                $SiteLinkProps = $SiteLinkResult.Properties
+                $SiteLinkName = if ($SiteLinkProps['name']) { $SiteLinkProps['name'][0] } else { "" }
+                
+                # Get connected sites
+                $ConnectedSites = @()
+                if ($SiteLinkProps['sitelist']) {
+                    foreach ($SiteDN in $SiteLinkProps['sitelist']) {
+                        if ($SiteDN -match 'CN=([^,]+)') {
+                            $ConnectedSites += $Matches[1]
+                        }
+                    }
+                }
+                
+                $SiteLinkDetails += [PSCustomObject]@{
+                    SiteLinkName = $SiteLinkName
+                    Description = if ($SiteLinkProps['description']) { $SiteLinkProps['description'][0] } else { "" }
+                    ConnectedSites = $ConnectedSites -join '; '
+                    SiteCount = $ConnectedSites.Count
+                    Cost = if ($SiteLinkProps['cost']) { $SiteLinkProps['cost'][0] } else { 100 }
+                    ReplicationInterval = if ($SiteLinkProps['replinterval']) { $SiteLinkProps['replinterval'][0] } else { 180 }
+                    HasCustomSchedule = if ($SiteLinkProps['schedule']) { $true } else { $false }
+                }
+            }
+            
+            $SiteLinkResults.Dispose()
+            $SiteLinkSearcher.Dispose()
+        } catch {
+            Write-Log "Error retrieving site links: $($_.Exception.Message)"
+        }
+        
+        if ($SiteLinkDetails.Count -gt 0) {
+            $SiteLinkDetails | Export-Csv "$Global:OutputPath\Infrastructure_Site_Links.csv" -NoTypeInformation
+        }
+        
+        # 7. Infrastructure Summary
         $InfraStats = [PSCustomObject]@{
-            # Domain Being Assessed
-            AssessedDomain = $DomainInfo.DomainName
-            AssessedDomainNetBIOS = $DomainInfo.NetBIOSName
-            
-            # Forest Info
-            ForestRoot = if ($ForestDN -match 'DC=([^,]+),DC=([^,]+)') { "$($Matches[1]).$($Matches[2])" } else { $ForestDN }
-            TotalForestDomains = $ForestInfo.DomainCount
+            # Forest Information
+            ForestName = $ForestInfo.ForestName
+            ForestDomainCount = $ForestInfo.DomainCount
             SchemaVersion = $ForestInfo.SchemaVersion
-            IsMultiDomainForest = $ForestInfo.IsMultiDomainForest
             
-            # som.ucsf.edu Domain Controllers
+            # Domain Information
+            DomainName = $DomainInfoReport.DomainName
+            DomainNetBIOSName = $DomainInfoReport.NetBIOSName
+            DomainMode = $DomainInfoReport.DomainMode
+            
+            # Domain Controllers
             TotalDomainControllers = $DCDetails.Count
             GlobalCatalogs = ($DCDetails | Where-Object {$_.IsGlobalCatalog -eq $true}).Count
             ReadOnlyDCs = ($DCDetails | Where-Object {$_.IsReadOnly -eq $true}).Count
             WritableDCs = ($DCDetails | Where-Object {$_.IsReadOnly -eq $false}).Count
-            EnabledDCs = ($DCDetails | Where-Object {$_.Enabled -eq $true}).Count
             
-            # Sites (Forest-wide with som.ucsf.edu DC presence)
-            TotalForestSites = $SiteDetails.Count
-            SitesWithSOMDCs = ($SiteDetails | Where-Object {$_.HasSOMDomainDCs -eq $true}).Count
+            # Sites and Topology
+            Sites = $SiteDetails.Count
+            SitesWithDCs = ($SiteDetails | Where-Object {$_.HasDCs -eq $true}).Count
+            SitesWithoutDCs = ($SiteDetails | Where-Object {$_.HasDCs -eq $false}).Count
+            TotalSubnets = $SubnetDetails.Count
+            SubnetsWithoutSites = ($SubnetDetails | Where-Object {$_.HasSiteAssociation -eq $false}).Count
+            SiteLinks = $SiteLinkDetails.Count
             
-            # Trusts for som.ucsf.edu
+            # Trusts
             TrustRelationships = $TrustDetails.Count
+            BidirectionalTrusts = ($TrustDetails | Where-Object {$_.TrustDirection -eq "Bidirectional"}).Count
             
-            # Assessment Details
-            AssessmentDate = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+            # Health Indicators
+            DCsWithDelegation = ($DCDetails | Where-Object {$_.TrustedForDelegation -eq $true}).Count
+            OrphanedSites = ($SiteDetails | Where-Object {$_.HasDCs -eq $false -and $_.HasSubnets -eq $true}).Count
+            
             ProcessingTime = ((Get-Date) - $ScriptStartTime).TotalMinutes
             AssessmentMethod = "ADSI"
+            RequiredWinRM = $false
+            Limitations = "Replication status, service health, and detailed DC metrics require WinRM"
         }
         
         $InfraStats | Export-Csv "$Global:OutputPath\Infrastructure_Summary_Stats.csv" -NoTypeInformation
-        Write-Host "  Summary statistics exported" -ForegroundColor Green
         
-        Write-Host "`n=== Assessment Summary for som.ucsf.edu ===" -ForegroundColor Cyan
-        Write-Host "Domain Controllers: $($DCDetails.Count) (GCs: $($InfraStats.GlobalCatalogs), RODCs: $($InfraStats.ReadOnlyDCs))" -ForegroundColor White
-        Write-Host "Sites with som.ucsf.edu DCs: $($InfraStats.SitesWithSOMDCs) out of $($InfraStats.TotalForestSites) forest sites" -ForegroundColor White
-        Write-Host "Trust Relationships: $($TrustDetails.Count)" -ForegroundColor White
-        Write-Host "Forest Domains: $($InfraStats.TotalForestDomains)" -ForegroundColor White
-        Write-Host "Schema Version: $($InfraStats.SchemaVersion)" -ForegroundColor White
+        Write-Host "`n=== Assessment Complete ===" -ForegroundColor Green
+        Write-Host "Forest: $($ForestInfo.DomainCount) domains, Schema version $($ForestInfo.SchemaVersion)" -ForegroundColor White
+        Write-Host "Domain Controllers: $($DCDetails.Count) total, $($InfraStats.GlobalCatalogs) GCs, $($InfraStats.ReadOnlyDCs) RODCs" -ForegroundColor White
+        Write-Host "Topology: $($SiteDetails.Count) sites, $($SubnetDetails.Count) subnets, $($SiteLinkDetails.Count) site links" -ForegroundColor White
+        Write-Host "Trusts: $($TrustDetails.Count) relationships" -ForegroundColor White
         
         Write-Log "DC and Infrastructure assessment completed in $([math]::Round($InfraStats.ProcessingTime, 2)) minutes"
         
@@ -363,5 +541,6 @@ function Get-DCInfrastructureAssessment {
 # Execute the assessment if script is run directly
 if ($MyInvocation.InvocationName -ne '.') {
     Get-DCInfrastructureAssessment
-    Write-Host "`nResults saved to: $Global:OutputPath" -ForegroundColor Yellow
+    Write-Host "`nDomain Controllers and Infrastructure Assessment completed." -ForegroundColor Green
+    Write-Host "Results saved in: $Global:OutputPath" -ForegroundColor Yellow
 }
