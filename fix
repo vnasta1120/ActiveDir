@@ -1,46 +1,80 @@
-PS C:\Users\aa-vnasta-som> C:\Scripts\DC-Infrastructure-Assessment.ps1
-Initializing Enhanced AD Assessment Core Infrastructure...
-Script version timestamp: 2025-06-19 11:02:26
-Auto-detecting organizational settings via ADSI...
-Auto-detected inactive user threshold: 42 days
-Auto-detected stale password threshold: 84 days
-Detected domain functional level: 7
-Checking output directory: C:\AD_Assessment
-Output directory already exists: C:\AD_Assessment
-Initializing log file: C:\AD_Assessment\AD_Assessment_Log_20250619_110226.txt
-Log file initialized successfully
+PS C:\Users\aa-vnasta-som> C:\Scripts\Diagnose.ps1
+=== DC Infrastructure Diagnostic ===
 
-Configuration Summary:
-- Inactive User Threshold: 42 days
-- Inactive Computer Threshold: 90 days
-- Stale Password Threshold: 84 days
-- Output Directory: C:\AD_Assessment
-- Log File: C:\AD_Assessment\AD_Assessment_Log_20250619_110226.txt
-- Using ADSI (No AD Module Required)
+Domain Info Retrieved:
+  Domain DN: DC=som,DC=ucsf,DC=edu
+  Domain Name: som
 
-2025-06-19 11:02:26 - Enhanced AD Assessment Core Infrastructure Initialized
-2025-06-19 11:02:26 - Configuration: Inactive Users: 42d, Inactive Computers: 90d
-2025-06-19 11:02:26 - ADSI-based implementation - No AD Module or WinRM dependencies
-ADSI connectivity verified - Domain: som
-2025-06-19 11:02:26 - ADSI connectivity verified - Domain: som
-Core infrastructure ready. Run individual assessment scripts.
-2025-06-19 11:02:26 - === Starting Domain Controllers and Infrastructure Assessment (ADSI) ===
-Getting Forest and Domain information via ADSI...
+Test 1: Checking Configuration Naming Context...
+  Config DN: CN=Configuration,DC=net,DC=ucsf,DC=edu
+  Successfully connected to Config container
+
+Test 2: Checking Partitions Container...
+  Trying to connect to: LDAP://CN=Partitions,CN=Configuration,DC=net,DC=ucsf,DC=edu
+  Successfully connected to Partitions container
+  Found 11 crossRef objects
+  Sample crossRef objects:
+    - Enterprise Configuration
+    - Enterprise Schema
+    - 8612c548-6765-4470-96fb-448485ba49a9
+
+Test 3: Checking Sites Container...
+  Trying to connect to: LDAP://CN=Sites,CN=Configuration,DC=net,DC=ucsf,DC=edu
+  Successfully connected to Sites container
+  Immediate children of Sites container:
+    - Inter-Site Transports (Class: interSiteTransportContainer)
+    - MBUCSFMC (Class: site)
+    - MTZUCSFMC (Class: site)
+    - PARUCSFMC (Class: site)
+    - QCUCSFMC (Class: site)
+    - SFGH (Class: site)
+    - Subnets (Class: subnetContainer)
+  Found 5 site objects
+    - Site: MBUCSFMC
+    - Site: SFGH
+    - Site: PARUCSFMC
+    - Site: MTZUCSFMC
+    - Site: QCUCSFMC
+
+Test 4: Checking Domain Controllers...
+  Method 1: Searching by userAccountControl flag...
+  Found 4 DCs using UAC flag
+    - DC: SOMAD03
+    - DC: SOMAD08
+    - DC: SOMAD01
+    - DC: SOMAD05
+
+  Method 2: Checking Domain Controllers OU...
+  Successfully connected to Domain Controllers OU
+  Found 4 computers in Domain Controllers OU
+
+Test 5: Checking Schema Container...
+  Schema DN: CN=Schema,CN=Configuration,DC=net,DC=ucsf,DC=edu
+  Successfully connected to Schema container
 0
-Analyzing Domain Controllers...
-Processing DC: SOMAD03
-Processing DC: SOMAD08
-Processing DC: SOMAD01
-Processing DC: SOMAD05
-Getting Sites and Subnets...
-0
-0
-0
-0
-0
-Getting Subnet Details...
-Getting Trust Relationships...
-Getting Site Links...
-2025-06-19 11:02:29 - DC and Infrastructure assessment completed in 0.05 minutes
-Domain Controllers and Infrastructure Assessment completed. Results in: C:\AD_Assessment
+  Schema Version: 88
+
+Test 6: Checking System Container for Trusts...
+  Trying to connect to: LDAP://CN=System,DC=som,DC=ucsf,DC=edu
+  Successfully connected to System container
+  Found 3 trust relationships
+    - Trust: ucsfmedicalcenter.org
+    - Trust: EPIBIO.NET
+    - Trust: net.ucsf.edu
+
+Test 7: Checking Inter-Site Transports...
+  Trying to connect to: LDAP://CN=Inter-Site Transports,CN=Sites,CN=Configuration,DC=net,DC=ucsf,DC=edu
+  Successfully connected to Inter-Site Transports
+  Transport containers:
+    - IP
+      Found 6 site links
+    - SMTP
+      Found 0 site links
+
+=== Diagnostic Complete ===
+
+Summary:
+- If you see errors above, it may indicate permission issues or missing containers
+- Zero results may indicate the searches are looking in the wrong locations
+- Check that you have appropriate permissions to read configuration partition
 PS C:\Users\aa-vnasta-som>
