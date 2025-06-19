@@ -120,17 +120,11 @@ function global:Get-ADSIPasswordPolicy {
         
         if ($MaxPwdAgeValue -ne [Int64]::MinValue -and $MaxPwdAgeValue -ne 0) {
             # Password ages are stored as negative values
-            # Use Math.Abs safely by converting to decimal first to avoid overflow
-            try {
-                $MaxPwdAgeDays = [int]([Math]::Abs([decimal]$MaxPwdAgeValue) / 864000000000)
-            }
-            catch {
-                # Fallback: manually handle the conversion
-                if ($MaxPwdAgeValue -lt 0) {
-                    $MaxPwdAgeDays = [int]((-$MaxPwdAgeValue) / 864000000000)
-                } else {
-                    $MaxPwdAgeDays = [int]($MaxPwdAgeValue / 864000000000)
-                }
+            # Simple conversion without Math.Abs to avoid overflow
+            if ($MaxPwdAgeValue -lt 0) {
+                $MaxPwdAgeDays = [int]((-$MaxPwdAgeValue) / 864000000000)
+            } else {
+                $MaxPwdAgeDays = [int]($MaxPwdAgeValue / 864000000000)
             }
         }
         
@@ -139,16 +133,10 @@ function global:Get-ADSIPasswordPolicy {
         
         if ($MinPwdAgeValue -ne [Int64]::MinValue -and $MinPwdAgeValue -ne 0) {
             # Password ages are stored as negative values
-            try {
-                $MinPwdAgeDays = [int]([Math]::Abs([decimal]$MinPwdAgeValue) / 864000000000)
-            }
-            catch {
-                # Fallback: manually handle the conversion
-                if ($MinPwdAgeValue -lt 0) {
-                    $MinPwdAgeDays = [int]((-$MinPwdAgeValue) / 864000000000)
-                } else {
-                    $MinPwdAgeDays = [int]($MinPwdAgeValue / 864000000000)
-                }
+            if ($MinPwdAgeValue -lt 0) {
+                $MinPwdAgeDays = [int]((-$MinPwdAgeValue) / 864000000000)
+            } else {
+                $MinPwdAgeDays = [int]($MinPwdAgeValue / 864000000000)
             }
         }
         
@@ -156,30 +144,20 @@ function global:Get-ADSIPasswordPolicy {
         $LockoutDurationValue = $Domain.lockoutDuration[0]
         $LockoutDuration = 0
         if ($LockoutDurationValue -ne [Int64]::MinValue -and $LockoutDurationValue -ne 0) {
-            try {
-                $LockoutDuration = [Math]::Abs([decimal]$LockoutDurationValue)
-            }
-            catch {
-                if ($LockoutDurationValue -lt 0) {
-                    $LockoutDuration = -$LockoutDurationValue
-                } else {
-                    $LockoutDuration = $LockoutDurationValue
-                }
+            if ($LockoutDurationValue -lt 0) {
+                $LockoutDuration = -$LockoutDurationValue
+            } else {
+                $LockoutDuration = $LockoutDurationValue
             }
         }
         
         $LockoutObservationValue = $Domain.lockOutObservationWindow[0]
         $LockoutObservationWindow = 0
         if ($LockoutObservationValue -ne [Int64]::MinValue -and $LockoutObservationValue -ne 0) {
-            try {
-                $LockoutObservationWindow = [Math]::Abs([decimal]$LockoutObservationValue)
-            }
-            catch {
-                if ($LockoutObservationValue -lt 0) {
-                    $LockoutObservationWindow = -$LockoutObservationValue
-                } else {
-                    $LockoutObservationWindow = $LockoutObservationValue
-                }
+            if ($LockoutObservationValue -lt 0) {
+                $LockoutObservationWindow = -$LockoutObservationValue
+            } else {
+                $LockoutObservationWindow = $LockoutObservationValue
             }
         }
         
@@ -598,31 +576,31 @@ function global:Get-ETA {
 function global:Write-Log {
     param($Message)
     $LogMessage = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - $Message"
-    if ($Global:LogFile) {
-        # Ensure the directory exists before trying to write the log
-        $LogDir = Split-Path $Global:LogFile -Parent
-        if (!(Test-Path $LogDir)) {
-            try {
-                New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
-            }
-            catch {
-                Write-Warning "Could not create log directory: $($_.Exception.Message)"
-            }
-        }
-        try {
-            $LogMessage | Out-File -FilePath $Global:LogFile -Append -ErrorAction SilentlyContinue
-        }
-        catch {
-            # Silently continue if we can't write to the log file
-        }
-    }
     Write-Host $LogMessage
+    # Don't try to write to file until we know directory exists
+}
+
+function global:Initialize-LogFile {
+    # This function creates the log file after directory is confirmed
+    param([string]$Path)
+    
+    try {
+        # Test writing to the log file
+        "Log initialized at $(Get-Date)" | Out-File -FilePath $Path -Force
+        return $true
+    }
+    catch {
+        Write-Warning "Cannot write to log file: $($_.Exception.Message)"
+        return $false
+    }
 }
 #endregion
 
 #region Global Configuration Initialization
 # Load configuration on script start
 Write-Host "Initializing Enhanced AD Assessment Core Infrastructure..." -ForegroundColor Cyan
+Write-Host "Script version timestamp: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor Gray
+
 $Global:Config = Get-ADAssessmentConfiguration -ConfigFilePath $ConfigFile -AutoDetect $UseAutoDetection
 
 # Override with command-line parameters if specified
@@ -641,36 +619,65 @@ $Global:OutputPath = $OutputPath
 $Global:StartTime = Get-Date
 $Global:ProgressPreference = 'Continue'
 
-# Create output directory with better error handling
+# Create output directory first - before any log file attempts
+Write-Host "Checking output directory: $Global:OutputPath" -ForegroundColor Yellow
+
 if (!(Test-Path $Global:OutputPath)) {
-    Write-Host "Creating output directory: $Global:OutputPath" -ForegroundColor Yellow
+    Write-Host "Output directory does not exist. Attempting to create..." -ForegroundColor Yellow
     try {
         New-Item -ItemType Directory -Path $Global:OutputPath -Force -ErrorAction Stop | Out-Null
-        Write-Host "Output directory created successfully" -ForegroundColor Green
+        Write-Host "Output directory created successfully at: $Global:OutputPath" -ForegroundColor Green
     }
     catch {
-        Write-Error "Failed to create output directory: $($_.Exception.Message)"
-        Write-Host "Attempting to use fallback directory in current path..." -ForegroundColor Yellow
-        $Global:OutputPath = Join-Path (Get-Location) "AD_Assessment"
+        Write-Error "Failed to create output directory at $Global:OutputPath : $($_.Exception.Message)"
+        
+        # Try current directory as fallback
+        $Global:OutputPath = Join-Path (Get-Location) "AD_Assessment_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+        Write-Host "Attempting to use fallback directory: $Global:OutputPath" -ForegroundColor Yellow
+        
         try {
             New-Item -ItemType Directory -Path $Global:OutputPath -Force -ErrorAction Stop | Out-Null
-            Write-Host "Using fallback output directory: $Global:OutputPath" -ForegroundColor Green
+            Write-Host "Fallback directory created successfully" -ForegroundColor Green
         }
         catch {
-            Write-Error "Failed to create fallback directory. Please ensure you have write permissions."
+            Write-Error "Failed to create fallback directory. Exiting."
             exit 1
         }
     }
 }
+else {
+    Write-Host "Output directory already exists: $Global:OutputPath" -ForegroundColor Green
+}
 
-# Create log file
+# Now create log file after directory is confirmed to exist
 $Global:LogFile = Join-Path $Global:OutputPath "AD_Assessment_Log_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
+Write-Host "Initializing log file: $Global:LogFile" -ForegroundColor Yellow
 
-Write-Host "Configuration Summary:" -ForegroundColor Yellow
+if (Initialize-LogFile -Path $Global:LogFile) {
+    Write-Host "Log file initialized successfully" -ForegroundColor Green
+    # Redefine Write-Log to actually write to file now
+    function global:Write-Log {
+        param($Message)
+        $LogMessage = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - $Message"
+        Write-Host $LogMessage
+        try {
+            $LogMessage | Out-File -FilePath $Global:LogFile -Append -ErrorAction Stop
+        }
+        catch {
+            # Silently continue if we can't write to log
+        }
+    }
+}
+else {
+    Write-Warning "Log file could not be initialized. Continuing without file logging."
+}
+
+Write-Host "`nConfiguration Summary:" -ForegroundColor Yellow
 Write-Host "- Inactive User Threshold: $($Global:Config.InactiveUserDays) days" -ForegroundColor White
 Write-Host "- Inactive Computer Threshold: $($Global:Config.InactiveComputerDays) days" -ForegroundColor White
 Write-Host "- Stale Password Threshold: $($Global:Config.StalePasswordDays) days" -ForegroundColor White
 Write-Host "- Output Directory: $Global:OutputPath" -ForegroundColor White
+Write-Host "- Log File: $Global:LogFile" -ForegroundColor White
 Write-Host "- Using ADSI (No AD Module Required)" -ForegroundColor Green
 Write-Host ""
 
