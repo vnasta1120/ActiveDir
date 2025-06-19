@@ -1,37 +1,39 @@
-PS C:\Users\aa-vnasta-som> C:\Scripts\AD-Security-Assessment.ps1
-Initializing Enhanced AD Assessment Core Infrastructure...
-Script version timestamp: 2025-06-19 09:52:56
-Auto-detecting organizational settings via ADSI...
-WARNING: Failed to get password policy via ADSI: Cannot compare "System.__ComObject" because it is not IComparable.
-Detected domain functional level: 7
-Checking output directory: C:\AD_Assessment
-Output directory does not exist. Attempting to create...
-Output directory created successfully at: C:\AD_Assessment
-Initializing log file: C:\AD_Assessment\AD_Assessment_Log_20250619_095256.txt
-Log file initialized successfully
+PS C:\Users\aa-vnasta-som> C:\Scripts\TestPassword.ps1
+Password Policy Diagnostic Test
+===============================
 
-Configuration Summary:
-- Inactive User Threshold: 90 days
-- Inactive Computer Threshold: 90 days
-- Stale Password Threshold: 180 days
-- Output Directory: C:\AD_Assessment
-- Log File: C:\AD_Assessment\AD_Assessment_Log_20250619_095256.txt
-- Using ADSI (No AD Module Required)
+Connecting to domain...
+Domain DN: DC=som,DC=ucsf,DC=edu
+Connected successfully!
 
-2025-06-19 09:52:56 - Enhanced AD Assessment Core Infrastructure Initialized
-2025-06-19 09:52:56 - Configuration: Inactive Users: 90d, Inactive Computers: 90d
-2025-06-19 09:52:56 - ADSI-based implementation - No AD Module or WinRM dependencies
-ADSI connectivity verified - Domain: som
-2025-06-19 09:52:56 - ADSI connectivity verified - Domain: som
-Core infrastructure ready. Run individual assessment scripts.
-2025-06-19 09:52:56 - === Starting AD Security Assessment (ADSI) ===
-Getting Password Policy via ADSI...
-WARNING: Failed to get password policy via ADSI: Cannot compare "System.__ComObject" because it is not IComparable.
-Checking for Fine-Grained Password Policies...
-Analyzing Privileged Groups...
-Checking for stale privileged accounts...
-Analyzing Built-in Administrator account...
-Analyzing Service Account Security...
-2025-06-19 09:53:09 - Security assessment completed in 0.22 minutes
-AD Security Assessment completed. Results in: C:\AD_Assessment
+Testing individual properties:
+------------------------------
+
+Testing maxPwdAge:
+  Raw value type: System.DirectoryServices.PropertyValueCollection
+  Unknown type, value: System.__ComObject
+
+Testing minPwdLength:
+  Raw value: 12
+  Type: System.DirectoryServices.PropertyValueCollection
+
+Testing pwdHistoryLength:
+  Raw value: 1
+  Type: System.DirectoryServices.PropertyValueCollection
+
+Testing lockoutThreshold:
+  Raw value: 10
+  Type: System.DirectoryServices.PropertyValueCollection
+
+
+Trying alternative method with DirectoryEntry:
+----------------------------------------------
+
+Using Properties collection:
+  maxPwdAge : System.__ComObject (Type: System.__ComObject)
+  minPwdLength : 12 (Type: System.Int32)
+  pwdHistoryLength : 1 (Type: System.Int32)
+  lockoutThreshold : 10 (Type: System.Int32)
+
+Test complete!
 PS C:\Users\aa-vnasta-som>
