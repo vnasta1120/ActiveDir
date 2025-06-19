@@ -1,21 +1,37 @@
-PS C:\Scripts> C:\Scripts\AD-Security-Assessment.ps1
-Out-File : Could not find a part of the path 'C:\AD_Assessment\AD_Assessment_Log_20250618_144149.txt'.
-At C:\Scripts\00-AD-Assessment-Core.ps1:535 char:23
-+ ... ogMessage | Out-File -FilePath $Global:LogFile -Append -ErrorAction S ...
-+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    + CategoryInfo          : OpenError: (:) [Out-File], DirectoryNotFoundException
-    + FullyQualifiedErrorId : FileOpenFailure,Microsoft.PowerShell.Commands.OutFileCommand
+PS C:\Users\aa-vnasta-som> C:\Scripts\AD-Security-Assessment.ps1
+Initializing Enhanced AD Assessment Core Infrastructure...
+Script version timestamp: 2025-06-19 09:52:56
+Auto-detecting organizational settings via ADSI...
+WARNING: Failed to get password policy via ADSI: Cannot compare "System.__ComObject" because it is not IComparable.
+Detected domain functional level: 7
+Checking output directory: C:\AD_Assessment
+Output directory does not exist. Attempting to create...
+Output directory created successfully at: C:\AD_Assessment
+Initializing log file: C:\AD_Assessment\AD_Assessment_Log_20250619_095256.txt
+Log file initialized successfully
 
-2025-06-19 09:44:10 - === Starting AD Security Assessment (ADSI) ===
+Configuration Summary:
+- Inactive User Threshold: 90 days
+- Inactive Computer Threshold: 90 days
+- Stale Password Threshold: 180 days
+- Output Directory: C:\AD_Assessment
+- Log File: C:\AD_Assessment\AD_Assessment_Log_20250619_095256.txt
+- Using ADSI (No AD Module Required)
+
+2025-06-19 09:52:56 - Enhanced AD Assessment Core Infrastructure Initialized
+2025-06-19 09:52:56 - Configuration: Inactive Users: 90d, Inactive Computers: 90d
+2025-06-19 09:52:56 - ADSI-based implementation - No AD Module or WinRM dependencies
+ADSI connectivity verified - Domain: som
+2025-06-19 09:52:56 - ADSI connectivity verified - Domain: som
+Core infrastructure ready. Run individual assessment scripts.
+2025-06-19 09:52:56 - === Starting AD Security Assessment (ADSI) ===
 Getting Password Policy via ADSI...
-WARNING: Failed to get password policy via ADSI: Cannot find an overload for "Abs" and the argument count: "1".
+WARNING: Failed to get password policy via ADSI: Cannot compare "System.__ComObject" because it is not IComparable.
 Checking for Fine-Grained Password Policies...
-Out-File : Could not find a part of the path 'C:\AD_Assessment\AD_Assessment_Log_20250618_144149.txt'.
-At C:\Scripts\00-AD-Assessment-Core.ps1:535 char:23
-+ ... ogMessage | Out-File -FilePath $Global:LogFile -Append -ErrorAction S ...
-+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    + CategoryInfo          : OpenError: (:) [Out-File], DirectoryNotFoundException
-    + FullyQualifiedErrorId : FileOpenFailure,Microsoft.PowerShell.Commands.OutFileCommand
-
+Analyzing Privileged Groups...
+Checking for stale privileged accounts...
+Analyzing Built-in Administrator account...
+Analyzing Service Account Security...
+2025-06-19 09:53:09 - Security assessment completed in 0.22 minutes
 AD Security Assessment completed. Results in: C:\AD_Assessment
-PS C:\Scripts>
+PS C:\Users\aa-vnasta-som>
