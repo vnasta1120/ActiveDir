@@ -1,67 +1,21 @@
 PS C:\Users\aa-vnasta-som> C:\Scripts\DC-Infrastructure-Assessment.ps1
-Initializing Enhanced AD Assessment Core Infrastructure...
-Script version timestamp: 2025-06-19 11:18:15
-Auto-detecting organizational settings via ADSI...
-Auto-detected inactive user threshold: 42 days
-Auto-detected stale password threshold: 84 days
-Detected domain functional level: 7
-Checking output directory: C:\AD_Assessment
-Output directory already exists: C:\AD_Assessment
-Initializing log file: C:\AD_Assessment\AD_Assessment_Log_20250619_111815.txt
-Log file initialized successfully
+At C:\Scripts\DC-Infrastructure-Assessment.ps1:365 char:55
++ ... Host "`nResults saved to: $Global:OutputPath" -ForegroundColor Yellow
++                                                 ~~~~~~~~~~~~~~~~~~~~~~~~~
+The string is missing the terminator: ".
+At C:\Scripts\DC-Infrastructure-Assessment.ps1:43 char:9
++     try {
++         ~
+Missing closing '}' in statement block or type definition.
+At C:\Scripts\DC-Infrastructure-Assessment.ps1:366 char:2
++ }
++  ~
+The Try statement is missing its Catch or Finally block.
+At C:\Scripts\DC-Infrastructure-Assessment.ps1:31 char:41
++ function Get-DCInfrastructureAssessment {
++                                         ~
+Missing closing '}' in statement block or type definition.
+    + CategoryInfo          : ParserError: (:) [], ParseException
+    + FullyQualifiedErrorId : TerminatorExpectedAtEndOfString
 
-Configuration Summary:
-- Inactive User Threshold: 42 days
-- Inactive Computer Threshold: 90 days
-- Stale Password Threshold: 84 days
-- Output Directory: C:\AD_Assessment
-- Log File: C:\AD_Assessment\AD_Assessment_Log_20250619_111815.txt
-- Using ADSI (No AD Module Required)
-
-2025-06-19 11:18:15 - Enhanced AD Assessment Core Infrastructure Initialized
-2025-06-19 11:18:15 - Configuration: Inactive Users: 42d, Inactive Computers: 90d
-2025-06-19 11:18:15 - ADSI-based implementation - No AD Module or WinRM dependencies
-ADSI connectivity verified - Domain: som
-2025-06-19 11:18:15 - ADSI connectivity verified - Domain: som
-Core infrastructure ready. Run individual assessment scripts.
-2025-06-19 11:18:15 - === Starting Forest-Aware DC and Infrastructure Assessment ===
-Getting Forest and Domain information...
-Domain: som (DN: DC=som,DC=ucsf,DC=edu)
-Forest Root: DC=net,DC=ucsf,DC=edu
-Configuration: CN=Configuration,DC=net,DC=ucsf,DC=edu
-Forest contains 5 domain(s): ucsfmedicalcenter.org, net.ucsf.edu, sde.net.ucsf.edu, campus.net.ucsf.edu, som.ucsf.edu
-0
-Schema Version: 88
-
-Analyzing Domain Controllers...
-Found 4 Domain Controllers
-  Processing DC: SOMAD03
-  Processing DC: SOMAD08
-  Processing DC: SOMAD01
-  Processing DC: SOMAD05
-
-Getting Sites and Subnets from forest configuration...
-Found 5 sites in forest
-0
-0
-0
-0
-0
-
-Getting Subnet Details...
-Found 1116 subnets in forest
-
-Getting Trust Relationships...
-Found 3 trust relationships
-
-Getting Site Links...
-Found 6 site links
-
-=== Assessment Complete ===
-Forest contains 5 domain(s)
-Found 4 DCs, 5 sites, 1116 subnets
-Found 3 trusts, 6 site links
-2025-06-19 11:18:18 - DC and Infrastructure assessment completed in 0.05 minutes
-
-Results saved to: C:\AD_Assessment
 PS C:\Users\aa-vnasta-som>
