@@ -119,31 +119,68 @@ function global:Get-ADSIPasswordPolicy {
         $MaxPwdAgeDays = 0
         
         if ($MaxPwdAgeValue -ne [Int64]::MinValue -and $MaxPwdAgeValue -ne 0) {
-            # Password ages are stored as negative values, so we negate to get positive
-            $MaxPwdAge = -$MaxPwdAgeValue
-            $MaxPwdAgeDays = [int]($MaxPwdAge / 864000000000)
+            # Password ages are stored as negative values
+            # Use Math.Abs safely by converting to decimal first to avoid overflow
+            try {
+                $MaxPwdAgeDays = [int]([Math]::Abs([decimal]$MaxPwdAgeValue) / 864000000000)
+            }
+            catch {
+                # Fallback: manually handle the conversion
+                if ($MaxPwdAgeValue -lt 0) {
+                    $MaxPwdAgeDays = [int]((-$MaxPwdAgeValue) / 864000000000)
+                } else {
+                    $MaxPwdAgeDays = [int]($MaxPwdAgeValue / 864000000000)
+                }
+            }
         }
         
         $MinPwdAgeValue = $Domain.minPwdAge[0]
         $MinPwdAgeDays = 0
         
         if ($MinPwdAgeValue -ne [Int64]::MinValue -and $MinPwdAgeValue -ne 0) {
-            # Password ages are stored as negative values, so we negate to get positive
-            $MinPwdAge = -$MinPwdAgeValue
-            $MinPwdAgeDays = [int]($MinPwdAge / 864000000000)
+            # Password ages are stored as negative values
+            try {
+                $MinPwdAgeDays = [int]([Math]::Abs([decimal]$MinPwdAgeValue) / 864000000000)
+            }
+            catch {
+                # Fallback: manually handle the conversion
+                if ($MinPwdAgeValue -lt 0) {
+                    $MinPwdAgeDays = [int]((-$MinPwdAgeValue) / 864000000000)
+                } else {
+                    $MinPwdAgeDays = [int]($MinPwdAgeValue / 864000000000)
+                }
+            }
         }
         
         # Handle lockout duration and observation window
         $LockoutDurationValue = $Domain.lockoutDuration[0]
         $LockoutDuration = 0
         if ($LockoutDurationValue -ne [Int64]::MinValue -and $LockoutDurationValue -ne 0) {
-            $LockoutDuration = -$LockoutDurationValue
+            try {
+                $LockoutDuration = [Math]::Abs([decimal]$LockoutDurationValue)
+            }
+            catch {
+                if ($LockoutDurationValue -lt 0) {
+                    $LockoutDuration = -$LockoutDurationValue
+                } else {
+                    $LockoutDuration = $LockoutDurationValue
+                }
+            }
         }
         
         $LockoutObservationValue = $Domain.lockOutObservationWindow[0]
         $LockoutObservationWindow = 0
         if ($LockoutObservationValue -ne [Int64]::MinValue -and $LockoutObservationValue -ne 0) {
-            $LockoutObservationWindow = -$LockoutObservationValue
+            try {
+                $LockoutObservationWindow = [Math]::Abs([decimal]$LockoutObservationValue)
+            }
+            catch {
+                if ($LockoutObservationValue -lt 0) {
+                    $LockoutObservationWindow = -$LockoutObservationValue
+                } else {
+                    $LockoutObservationWindow = $LockoutObservationValue
+                }
+            }
         }
         
         return @{
@@ -565,9 +602,19 @@ function global:Write-Log {
         # Ensure the directory exists before trying to write the log
         $LogDir = Split-Path $Global:LogFile -Parent
         if (!(Test-Path $LogDir)) {
-            New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
+            try {
+                New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
+            }
+            catch {
+                Write-Warning "Could not create log directory: $($_.Exception.Message)"
+            }
         }
-        $LogMessage | Out-File -FilePath $Global:LogFile -Append -ErrorAction SilentlyContinue
+        try {
+            $LogMessage | Out-File -FilePath $Global:LogFile -Append -ErrorAction SilentlyContinue
+        }
+        catch {
+            # Silently continue if we can't write to the log file
+        }
     }
     Write-Host $LogMessage
 }
@@ -594,14 +641,30 @@ $Global:OutputPath = $OutputPath
 $Global:StartTime = Get-Date
 $Global:ProgressPreference = 'Continue'
 
-# Create output directory
+# Create output directory with better error handling
 if (!(Test-Path $Global:OutputPath)) {
     Write-Host "Creating output directory: $Global:OutputPath" -ForegroundColor Yellow
-    New-Item -ItemType Directory -Path $Global:OutputPath -Force | Out-Null
+    try {
+        New-Item -ItemType Directory -Path $Global:OutputPath -Force -ErrorAction Stop | Out-Null
+        Write-Host "Output directory created successfully" -ForegroundColor Green
+    }
+    catch {
+        Write-Error "Failed to create output directory: $($_.Exception.Message)"
+        Write-Host "Attempting to use fallback directory in current path..." -ForegroundColor Yellow
+        $Global:OutputPath = Join-Path (Get-Location) "AD_Assessment"
+        try {
+            New-Item -ItemType Directory -Path $Global:OutputPath -Force -ErrorAction Stop | Out-Null
+            Write-Host "Using fallback output directory: $Global:OutputPath" -ForegroundColor Green
+        }
+        catch {
+            Write-Error "Failed to create fallback directory. Please ensure you have write permissions."
+            exit 1
+        }
+    }
 }
 
 # Create log file
-$Global:LogFile = "$Global:OutputPath\AD_Assessment_Log_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
+$Global:LogFile = Join-Path $Global:OutputPath "AD_Assessment_Log_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
 
 Write-Host "Configuration Summary:" -ForegroundColor Yellow
 Write-Host "- Inactive User Threshold: $($Global:Config.InactiveUserDays) days" -ForegroundColor White
