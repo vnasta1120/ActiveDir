@@ -7,7 +7,12 @@
 
 param(
     [Parameter(Mandatory = $false)]
-    [ValidateScript({Test-Path $_ -PathType Leaf})]
+    [ValidateScript({
+        if ($_ -and !(Test-Path $_ -PathType Leaf)) {
+            throw "ConfigFile path '$_' does not exist"
+        }
+        return $true
+    })]
     [string]$ConfigFile,
     
     [Parameter(Mandatory = $false)]
@@ -557,6 +562,11 @@ function global:Write-Log {
     param($Message)
     $LogMessage = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - $Message"
     if ($Global:LogFile) {
+        # Ensure the directory exists before trying to write the log
+        $LogDir = Split-Path $Global:LogFile -Parent
+        if (!(Test-Path $LogDir)) {
+            New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
+        }
         $LogMessage | Out-File -FilePath $Global:LogFile -Append -ErrorAction SilentlyContinue
     }
     Write-Host $LogMessage
@@ -586,6 +596,7 @@ $Global:ProgressPreference = 'Continue'
 
 # Create output directory
 if (!(Test-Path $Global:OutputPath)) {
+    Write-Host "Creating output directory: $Global:OutputPath" -ForegroundColor Yellow
     New-Item -ItemType Directory -Path $Global:OutputPath -Force | Out-Null
 }
 
