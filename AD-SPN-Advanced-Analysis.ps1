@@ -16,7 +16,18 @@ param(
 if (-not $Global:Config) {
     $CoreScript = Join-Path (Split-Path $MyInvocation.MyCommand.Path) "00-AD-Assessment-Core.ps1"
     if (Test-Path $CoreScript) {
-        . $CoreScript -OutputPath $OutputPath -ConfigFile $ConfigFile
+        # Build parameters hash table for splatting
+        $CoreParams = @{
+            OutputPath = $OutputPath
+        }
+        
+        # Only add ConfigFile if it's not empty
+        if (![string]::IsNullOrEmpty($ConfigFile)) {
+            $CoreParams['ConfigFile'] = $ConfigFile
+        }
+        
+        # Load core script with splatting
+        . $CoreScript @CoreParams
     } else {
         Write-Error "Core infrastructure script not found: $CoreScript"
         exit 1
