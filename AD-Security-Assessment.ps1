@@ -113,13 +113,24 @@ function Get-ADSecurityAssessment {
                         $AppliesTo = $AppliedObjects -join '; '
                     }
                     
-                    # Handle password age with Int64.MinValue check
+                    # Handle password age with Int64.MinValue check and safe conversion
                     $MaxPasswordAgeDays = 0
                     if ($FGPPProps['msds-maximumpasswordage']) {
                         $MaxPwdAgeValue = $FGPPProps['msds-maximumpasswordage'][0]
                         if ($MaxPwdAgeValue -ne [Int64]::MinValue -and $MaxPwdAgeValue -ne 0) {
                             # Password ages are stored as negative values
-                            $MaxPasswordAgeDays = [int](-$MaxPwdAgeValue / 864000000000)
+                            # Use safe conversion method
+                            try {
+                                $MaxPasswordAgeDays = [int]([Math]::Abs([decimal]$MaxPwdAgeValue) / 864000000000)
+                            }
+                            catch {
+                                # Fallback: manually handle the conversion
+                                if ($MaxPwdAgeValue -lt 0) {
+                                    $MaxPasswordAgeDays = [int]((-$MaxPwdAgeValue) / 864000000000)
+                                } else {
+                                    $MaxPasswordAgeDays = [int]($MaxPwdAgeValue / 864000000000)
+                                }
+                            }
                         }
                     }
                     
