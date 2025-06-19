@@ -1,39 +1,16 @@
-PS C:\Users\aa-vnasta-som> C:\Scripts\TestPassword.ps1
-Password Policy Diagnostic Test
-===============================
+PS C:\Users\aa-vnasta-som> C:\Scripts\AD-Security-Assessment.ps1
+2025-06-19 10:14:18 - === Starting AD Security Assessment (ADSI) ===
+Getting Password Policy via ADSI...
+WARNING: Failed to get password policy via ADSI: Cannot compare "System.__ComObject" because it is not IComparable.
+Checking for Fine-Grained Password Policies...
+2025-06-19 10:14:18 - Error retrieving Fine-Grained Password Policies: Could not find a part of the path 'C:\AD_Assessment\Security_Fine_Grained_Password_Policies.csv'.
+Analyzing Privileged Groups...
+2025-06-19 10:14:19 - Critical error in security assessment: Could not find a part of the path 'C:\AD_Assessment\Security_Privileged_Groups.csv'.
+Export-Csv : Could not find a part of the path 'C:\AD_Assessment\Security_Privileged_Groups.csv'.
+At C:\Scripts\AD-Security-Assessment.ps1:274 char:30
++ ... pAnalysis | Export-Csv "$Global:OutputPath\Security_Privileged_Groups ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : OpenError: (:) [Export-Csv], DirectoryNotFoundException
+    + FullyQualifiedErrorId : FileOpenFailure,Microsoft.PowerShell.Commands.ExportCsvCommand
 
-Connecting to domain...
-Domain DN: DC=som,DC=ucsf,DC=edu
-Connected successfully!
-
-Testing individual properties:
-------------------------------
-
-Testing maxPwdAge:
-  Raw value type: System.DirectoryServices.PropertyValueCollection
-  Unknown type, value: System.__ComObject
-
-Testing minPwdLength:
-  Raw value: 12
-  Type: System.DirectoryServices.PropertyValueCollection
-
-Testing pwdHistoryLength:
-  Raw value: 1
-  Type: System.DirectoryServices.PropertyValueCollection
-
-Testing lockoutThreshold:
-  Raw value: 10
-  Type: System.DirectoryServices.PropertyValueCollection
-
-
-Trying alternative method with DirectoryEntry:
-----------------------------------------------
-
-Using Properties collection:
-  maxPwdAge : System.__ComObject (Type: System.__ComObject)
-  minPwdLength : 12 (Type: System.Int32)
-  pwdHistoryLength : 1 (Type: System.Int32)
-  lockoutThreshold : 10 (Type: System.Int32)
-
-Test complete!
 PS C:\Users\aa-vnasta-som>
