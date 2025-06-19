@@ -109,21 +109,46 @@ function global:Get-ADSIPasswordPolicy {
         
         $Domain = [ADSI]"LDAP://$($DomainInfo.DomainDN)"
         
-        # Convert file time to days
-        $MaxPwdAge = [System.Math]::Abs($Domain.maxPwdAge[0])
-        $MaxPwdAgeDays = if ($MaxPwdAge -eq 0) { 0 } else { $MaxPwdAge / 864000000000 }
+        # Convert file time to days - handle Int64.MinValue for "never expires"
+        $MaxPwdAgeValue = $Domain.maxPwdAge[0]
+        $MaxPwdAgeDays = 0
         
-        $MinPwdAge = [System.Math]::Abs($Domain.minPwdAge[0])
-        $MinPwdAgeDays = if ($MinPwdAge -eq 0) { 0 } else { $MinPwdAge / 864000000000 }
+        if ($MaxPwdAgeValue -ne [Int64]::MinValue -and $MaxPwdAgeValue -ne 0) {
+            # Password ages are stored as negative values, so we negate to get positive
+            $MaxPwdAge = -$MaxPwdAgeValue
+            $MaxPwdAgeDays = [int]($MaxPwdAge / 864000000000)
+        }
+        
+        $MinPwdAgeValue = $Domain.minPwdAge[0]
+        $MinPwdAgeDays = 0
+        
+        if ($MinPwdAgeValue -ne [Int64]::MinValue -and $MinPwdAgeValue -ne 0) {
+            # Password ages are stored as negative values, so we negate to get positive
+            $MinPwdAge = -$MinPwdAgeValue
+            $MinPwdAgeDays = [int]($MinPwdAge / 864000000000)
+        }
+        
+        # Handle lockout duration and observation window
+        $LockoutDurationValue = $Domain.lockoutDuration[0]
+        $LockoutDuration = 0
+        if ($LockoutDurationValue -ne [Int64]::MinValue -and $LockoutDurationValue -ne 0) {
+            $LockoutDuration = -$LockoutDurationValue
+        }
+        
+        $LockoutObservationValue = $Domain.lockOutObservationWindow[0]
+        $LockoutObservationWindow = 0
+        if ($LockoutObservationValue -ne [Int64]::MinValue -and $LockoutObservationValue -ne 0) {
+            $LockoutObservationWindow = -$LockoutObservationValue
+        }
         
         return @{
-            MaxPasswordAge = [int]$MaxPwdAgeDays
-            MinPasswordAge = [int]$MinPwdAgeDays
+            MaxPasswordAge = $MaxPwdAgeDays
+            MinPasswordAge = $MinPwdAgeDays
             MinPasswordLength = $Domain.minPwdLength[0]
             PasswordHistoryLength = $Domain.pwdHistoryLength[0]
             LockoutThreshold = $Domain.lockoutThreshold[0]
-            LockoutDuration = $Domain.lockoutDuration[0]
-            LockoutObservationWindow = $Domain.lockOutObservationWindow[0]
+            LockoutDuration = $LockoutDuration
+            LockoutObservationWindow = $LockoutObservationWindow
         }
     }
     catch {
