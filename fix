@@ -6,7 +6,7 @@ At C:\Scripts\00-AD-Assessment-Core.ps1:535 char:23
     + CategoryInfo          : OpenError: (:) [Out-File], DirectoryNotFoundException
     + FullyQualifiedErrorId : FileOpenFailure,Microsoft.PowerShell.Commands.OutFileCommand
 
-2025-06-19 09:26:49 - === Starting AD Security Assessment (ADSI) ===
+2025-06-19 09:44:10 - === Starting AD Security Assessment (ADSI) ===
 Getting Password Policy via ADSI...
 WARNING: Failed to get password policy via ADSI: Cannot find an overload for "Abs" and the argument count: "1".
 Checking for Fine-Grained Password Policies...
