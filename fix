@@ -1,24 +1,13 @@
-PS C:\Users\aa-vnasta-som> C:\Scripts\Debug-Security-Assessment.ps1
-=== DEBUG: Security Assessment Loading ===
-
-Checking Global Variables:
-- Global:Config exists: True
-- Global:OutputPath: C:\AD_Assessment
-- Global:LogFile: C:\AD_Assessment\AD_Assessment_Log_20250619_095256.txt
-- Output directory exists: False
-
-Manually loading core script...
-Core script found at: C:\Scripts\00-AD-Assessment-Core.ps1
+PS C:\Users\aa-vnasta-som> C:\Scripts\DC-Infrastructure-Assessment.ps1
 Initializing Enhanced AD Assessment Core Infrastructure...
-Script version timestamp: 2025-06-19 10:22:11
+Script version timestamp: 2025-06-19 11:02:26
 Auto-detecting organizational settings via ADSI...
 Auto-detected inactive user threshold: 42 days
 Auto-detected stale password threshold: 84 days
 Detected domain functional level: 7
 Checking output directory: C:\AD_Assessment
-Output directory does not exist. Attempting to create...
-Output directory created successfully at: C:\AD_Assessment
-Initializing log file: C:\AD_Assessment\AD_Assessment_Log_20250619_102211.txt
+Output directory already exists: C:\AD_Assessment
+Initializing log file: C:\AD_Assessment\AD_Assessment_Log_20250619_110226.txt
 Log file initialized successfully
 
 Configuration Summary:
@@ -26,19 +15,32 @@ Configuration Summary:
 - Inactive Computer Threshold: 90 days
 - Stale Password Threshold: 84 days
 - Output Directory: C:\AD_Assessment
-- Log File: C:\AD_Assessment\AD_Assessment_Log_20250619_102211.txt
+- Log File: C:\AD_Assessment\AD_Assessment_Log_20250619_110226.txt
 - Using ADSI (No AD Module Required)
 
-2025-06-19 10:22:11 - Enhanced AD Assessment Core Infrastructure Initialized
-2025-06-19 10:22:11 - Configuration: Inactive Users: 42d, Inactive Computers: 90d
-2025-06-19 10:22:11 - ADSI-based implementation - No AD Module or WinRM dependencies
+2025-06-19 11:02:26 - Enhanced AD Assessment Core Infrastructure Initialized
+2025-06-19 11:02:26 - Configuration: Inactive Users: 42d, Inactive Computers: 90d
+2025-06-19 11:02:26 - ADSI-based implementation - No AD Module or WinRM dependencies
 ADSI connectivity verified - Domain: som
-2025-06-19 10:22:11 - ADSI connectivity verified - Domain: som
+2025-06-19 11:02:26 - ADSI connectivity verified - Domain: som
 Core infrastructure ready. Run individual assessment scripts.
-
-After loading core script:
-- Global:OutputPath: C:\AD_Assessment
-- Output directory exists: True
-
-=== END DEBUG ===
+2025-06-19 11:02:26 - === Starting Domain Controllers and Infrastructure Assessment (ADSI) ===
+Getting Forest and Domain information via ADSI...
+0
+Analyzing Domain Controllers...
+Processing DC: SOMAD03
+Processing DC: SOMAD08
+Processing DC: SOMAD01
+Processing DC: SOMAD05
+Getting Sites and Subnets...
+0
+0
+0
+0
+0
+Getting Subnet Details...
+Getting Trust Relationships...
+Getting Site Links...
+2025-06-19 11:02:29 - DC and Infrastructure assessment completed in 0.05 minutes
+Domain Controllers and Infrastructure Assessment completed. Results in: C:\AD_Assessment
 PS C:\Users\aa-vnasta-som>
