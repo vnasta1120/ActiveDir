@@ -52,15 +52,26 @@ function Get-ADSecurityAssessment {
         
         $PasswordPolicy = Get-ADSIPasswordPolicy
         if ($PasswordPolicy) {
+            # Calculate lockout duration and observation window in minutes
+            $LockoutDurationMinutes = 0
+            if ($PasswordPolicy.LockoutDuration -ne 0) {
+                $LockoutDurationMinutes = [int]($PasswordPolicy.LockoutDuration / 600000000)
+            }
+            
+            $LockoutObservationMinutes = 0
+            if ($PasswordPolicy.LockoutObservationWindow -ne 0) {
+                $LockoutObservationMinutes = [int]($PasswordPolicy.LockoutObservationWindow / 600000000)
+            }
+            
             $PasswordPolicyReport = [PSCustomObject]@{
                 ComplexityEnabled = "Unknown"  # Not easily available via ADSI
                 MinPasswordLength = $PasswordPolicy.MinPasswordLength
                 PasswordHistoryCount = $PasswordPolicy.PasswordHistoryLength
                 MaxPasswordAgeDays = $PasswordPolicy.MaxPasswordAge
                 MinPasswordAgeDays = $PasswordPolicy.MinPasswordAge
-                LockoutDurationMinutes = if ($PasswordPolicy.LockoutDuration) { $PasswordPolicy.LockoutDuration / 600000000 } else { 0 }
+                LockoutDurationMinutes = $LockoutDurationMinutes
                 LockoutThreshold = $PasswordPolicy.LockoutThreshold
-                LockoutObservationWindowMinutes = if ($PasswordPolicy.LockoutObservationWindow) { [math]::Abs($PasswordPolicy.LockoutObservationWindow) / 600000000 } else { 0 }
+                LockoutObservationWindowMinutes = $LockoutObservationMinutes
                 ReversibleEncryptionEnabled = "Unknown"  # Not easily available via ADSI
                 AutoDetectedInactiveThreshold = $Global:Config.InactiveUserDays
                 AssessmentMethod = "ADSI"
@@ -102,12 +113,22 @@ function Get-ADSecurityAssessment {
                         $AppliesTo = $AppliedObjects -join '; '
                     }
                     
+                    # Handle password age with Int64.MinValue check
+                    $MaxPasswordAgeDays = 0
+                    if ($FGPPProps['msds-maximumpasswordage']) {
+                        $MaxPwdAgeValue = $FGPPProps['msds-maximumpasswordage'][0]
+                        if ($MaxPwdAgeValue -ne [Int64]::MinValue -and $MaxPwdAgeValue -ne 0) {
+                            # Password ages are stored as negative values
+                            $MaxPasswordAgeDays = [int](-$MaxPwdAgeValue / 864000000000)
+                        }
+                    }
+                    
                     $FGPPDetails += [PSCustomObject]@{
                         Name = if ($FGPPProps['name']) { $FGPPProps['name'][0] } else { "" }
                         Precedence = if ($FGPPProps['msds-passwordsettingsprecedence']) { $FGPPProps['msds-passwordsettingsprecedence'][0] } else { 0 }
                         MinPasswordLength = if ($FGPPProps['msds-minimumpasswordlength']) { $FGPPProps['msds-minimumpasswordlength'][0] } else { 0 }
                         PasswordHistoryCount = if ($FGPPProps['msds-passwordhistorylength']) { $FGPPProps['msds-passwordhistorylength'][0] } else { 0 }
-                        MaxPasswordAgeDays = if ($FGPPProps['msds-maximumpasswordage']) { [math]::Abs($FGPPProps['msds-maximumpasswordage'][0]) / 864000000000 } else { 0 }
+                        MaxPasswordAgeDays = $MaxPasswordAgeDays
                         ComplexityEnabled = if ($FGPPProps['msds-passwordcomplexityenabled']) { [bool]$FGPPProps['msds-passwordcomplexityenabled'][0] } else { $false }
                         AppliesTo = $AppliesTo
                         AppliedObjectCount = if ($FGPPProps['msds-psoappliesto']) { $FGPPProps['msds-psoappliesto'].Count } else { 0 }
