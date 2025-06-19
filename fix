@@ -1,7 +1,21 @@
-PS C:\Scripts> .\AD-Users-Enhanced-Assessment.ps1
-WARNING: Failed to load core script: Cannot validate argument on parameter 'ConfigFile'. Cannot bind argument to parameter 'Path' because it
-is an empty string.
-Using embedded core functions...
-Using embedded configuration with defaults
-2025-06-18 14:33:30 - === Starting Enhanced AD Users Assessment with ADUAC Enumeration (ADSI) ===
-Getting total user count via ADSI...
+PS C:\Scripts> C:\Scripts\AD-Security-Assessment.ps1
+Out-File : Could not find a part of the path 'C:\AD_Assessment\AD_Assessment_Log_20250618_144149.txt'.
+At C:\Scripts\00-AD-Assessment-Core.ps1:535 char:23
++ ... ogMessage | Out-File -FilePath $Global:LogFile -Append -ErrorAction S ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : OpenError: (:) [Out-File], DirectoryNotFoundException
+    + FullyQualifiedErrorId : FileOpenFailure,Microsoft.PowerShell.Commands.OutFileCommand
+
+2025-06-19 09:26:49 - === Starting AD Security Assessment (ADSI) ===
+Getting Password Policy via ADSI...
+WARNING: Failed to get password policy via ADSI: Cannot find an overload for "Abs" and the argument count: "1".
+Checking for Fine-Grained Password Policies...
+Out-File : Could not find a part of the path 'C:\AD_Assessment\AD_Assessment_Log_20250618_144149.txt'.
+At C:\Scripts\00-AD-Assessment-Core.ps1:535 char:23
++ ... ogMessage | Out-File -FilePath $Global:LogFile -Append -ErrorAction S ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : OpenError: (:) [Out-File], DirectoryNotFoundException
+    + FullyQualifiedErrorId : FileOpenFailure,Microsoft.PowerShell.Commands.OutFileCommand
+
+AD Security Assessment completed. Results in: C:\AD_Assessment
+PS C:\Scripts>
